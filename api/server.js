@@ -7,16 +7,16 @@ const PORT = process.env.PORT || 10000;
 const ROUTINE_ID = process.env.ROUTINE_ID || "";
 const ROUTINE_TOKEN = process.env.ROUTINE_TOKEN || "";
 const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || "").toLowerCase().split(/[,\s]+/).filter(Boolean);
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "https://scanner-factures.onrender.com").split(/[,\s]+/).filter(Boolean);
 const MIN_INTERVAL_MS = +(process.env.MIN_INTERVAL_MS || 120000);
 
 let lastRun = 0;
 
 function send(res, origin, status, body){
   const h = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
-  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+  // CORS ouvert : la sécurité repose sur le jeton Microsoft vérifié ci-dessous, pas sur l'origine
+  if (origin) {
     h["Access-Control-Allow-Origin"] = origin; h["Vary"] = "Origin";
-    h["Access-Control-Allow-Headers"] = "Authorization, Content-Type"; h["Access-Control-Allow-Methods"] = "POST, OPTIONS";
+    h["Access-Control-Allow-Headers"] = "Authorization, Content-Type"; h["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"; h["Access-Control-Max-Age"] = "600";
   }
   res.writeHead(status, h); res.end(body === undefined ? "" : JSON.stringify(body));
 }

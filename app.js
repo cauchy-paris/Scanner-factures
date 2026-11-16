@@ -783,12 +783,14 @@ async function runNow(){
   btn.disabled = true; msg.className = "hint"; msg.textContent = "Lancement… (jusqu'à 1 minute si le service était en veille)";
   try {
     const token = await getToken();
+    // réveille le service (offre gratuite Render : mise en veille), puis lance
+    for (let i = 0; i < 6; i++) { try { const h = await fetch(API_URL + "/health", {cache: "no-store"}); if (h.ok) break; } catch(e) {} await new Promise(r => setTimeout(r, 8000)); }
     const r = await fetch(API_URL + "/run", { method: "POST", headers: { Authorization: "Bearer " + token } });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
     msg.textContent = "Traitement lancé. Le compte rendu arrivera dans Claude ; actualisez le suivi dans quelques minutes.";
     store.set("scanner.lastRun", Date.now());
-  } catch(e) { msg.className = "msg"; msg.textContent = "Lancement impossible : " + (e.code === "signed_out" ? "reconnectez-vous." : e.message); }
+  } catch(e) { msg.className = "msg"; msg.textContent = "Lancement impossible : " + (e.code === "signed_out" ? "reconnectez-vous." : e instanceof TypeError ? "le service de lancement ne répond pas (" + API_URL + "). Réessayez dans une minute." : e.message); }
   finally { setTimeout(() => { btn.disabled = false; }, 30000); }
 }
 $("runNow").onclick = runNow;
