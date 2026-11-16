@@ -27,9 +27,9 @@ let dest = null;            // [{name, id}] du dossier racine au dossier choisi
 let items = [];
 let seq = 0;
 let sending = false;
-const opt = { pdf: store.get("scanner.pdf", true), bw: store.get("scanner.bw", false) };
+const opt = { pdf: store.get("scanner.pdf.v2", false), bw: store.get("scanner.bw", false) };
 $("optPdf").checked = opt.pdf; $("optBw").checked = opt.bw;
-$("optPdf").onchange = e => { opt.pdf = e.target.checked; store.set("scanner.pdf", opt.pdf); refreshNames(); };
+$("optPdf").onchange = e => { opt.pdf = e.target.checked; store.set("scanner.pdf.v2", opt.pdf); refreshNames(); };
 $("optBw").onchange = e => { opt.bw = e.target.checked; store.set("scanner.bw", opt.bw); };
 
 function showBanner(text, isErr){ const b = $("banner"); b.textContent = text; b.className = "banner" + (isErr ? " err" : ""); b.hidden = !text; }
