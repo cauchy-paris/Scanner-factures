@@ -1,6 +1,6 @@
 // Réglages de l'appli. L'identifiant d'application vient de l'inscription Azure (Entra ID) ; ce n'est pas un secret.
 window.SCANNER_CONFIG = {
-  clientId: "",                 // « ID d'application (client) » de l'inscription Azure
+  clientId: "3900ac65-953a-4169-89cf-5c2e012d7bf7",               // « ID d'application (client) » de l'inscription Azure
   tenant: "common",             // "common" = tout compte Microsoft (pro ou personnel)
   // Dossier proposé par défaut à la première connexion (ignoré s'il n'existe pas dans le OneDrive connecté)
   defaultPath: ["Comptabilité", "Exercice 2026", "Achat", "Factures", "À traiter"],
