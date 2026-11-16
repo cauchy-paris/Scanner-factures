@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Scanner de factures</title>
+<meta name="description" content="Photographier, recadrer et envoyer ses factures dans OneDrive.">
+<meta name="theme-color" content="#1d4ed8">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+*{box-sizing:border-box}
+:root{padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;font-size:14px}
+img{max-width:100%}
+/* Layout : une colonne d'outil (max 720px), barre de destination en haut, file d'attente de pièces, barre d'envoi collée en bas */
+:root{
+  --bg:#eef1f5; --surface:#ffffff; --sunken:#e3e8ef; --fg:#14202e; --muted:#5b6878; --line:#cfd7e2;
+  --accent:#1d4ed8; --accent-fg:#ffffff; --accent-soft:#dbe5fb;
+  --ok:#137a43; --ok-soft:#d7f0e1; --warn:#9a5b00; --warn-soft:#fcecd0; --err:#b42318; --err-soft:#fbe0dd;
+  --shade:rgba(10,18,30,.72);
+  --f-ui:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f151d; --surface:#18212c; --sunken:#111821; --fg:#e6ebf2; --muted:#93a0b2; --line:#2b3744;
+  --accent:#6e9bff; --accent-fg:#0b1220; --accent-soft:#1d2c4a;
+  --ok:#52c98a; --ok-soft:#163626; --warn:#e7a948; --warn-soft:#3a2a10; --err:#ff8a7d; --err-soft:#3d1a17;
+  --shade:rgba(0,0,0,.8); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f151d; --surface:#18212c; --sunken:#111821; --fg:#e6ebf2; --muted:#93a0b2; --line:#2b3744;
+  --accent:#6e9bff; --accent-fg:#0b1220; --accent-soft:#1d2c4a;
+  --ok:#52c98a; --ok-soft:#163626; --warn:#e7a948; --warn-soft:#3a2a10; --err:#ff8a7d; --err-soft:#3d1a17;
+  --shade:rgba(0,0,0,.8); color-scheme:dark}
+[hidden]{display:none!important}
+html,body{min-height:100%}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-ui);font-size:15px;line-height:1.45;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.wrap{max-width:720px;margin:0 auto;padding-block:18px 120px;display:flex;flex-direction:column;gap:16px}
+h1{font-size:20px;margin:0;font-weight:700;letter-spacing:-.01em;text-wrap:balance}
+.sub{color:var(--muted);margin:2px 0 0;font-size:13.5px}
+button{font:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible,label.btn:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--line);background:var(--surface);color:var(--fg);
+  border-radius:10px;padding:9px 14px;font-weight:500;min-height:42px;user-select:none}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent);font-weight:600}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--accent)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn svg{width:18px;height:18px;flex:none}
+.btn input[type=file]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;z-index:1;margin:0;padding:0;border:0}
+.label{font-size:11.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+
+/* destination */
+.dest{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 14px;display:flex;gap:12px;align-items:center}
+.dest .info{flex:1;min-width:0}
+.crumbs{font-family:var(--f-mono);font-size:13px;overflow-wrap:anywhere;margin-top:2px}
+.crumbs b{font-weight:500;color:var(--accent)}
+.hint{font-size:12.5px;color:var(--muted);margin-top:4px}
+
+/* actions */
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.big{position:relative;flex-direction:column;min-height:96px;border-radius:14px;font-size:15px;gap:6px}
+.big svg{width:28px;height:28px}
+.big small{font-weight:400;color:inherit;opacity:.8;font-size:12px}
+.drop{border:1.5px dashed var(--line);border-radius:14px;padding:14px;text-align:center;color:var(--muted);font-size:13.5px;background:transparent}
+.drop.on{border-color:var(--accent);background:var(--accent-soft);color:var(--fg)}
+.opts{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;font-size:13.5px;color:var(--muted)}
+.opts label{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.opts input{accent-color:var(--accent);width:16px;height:16px}
+
+/* queue */
+.qhead{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.queue{display:flex;flex-direction:column;gap:10px}
+.item{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px;display:grid;grid-template-columns:72px 1fr;gap:12px;align-items:start}
+.thumb{width:72px;height:92px;border-radius:6px;background:var(--sunken);object-fit:contain;display:block;border:1px solid var(--line)}
+.thumb.pdf{display:flex;align-items:center;justify-content:center;font-family:var(--f-mono);font-weight:500;color:var(--muted);font-size:13px}
+.meta{min-width:0;display:flex;flex-direction:column;gap:6px}
+.name{display:flex;align-items:center;gap:4px;min-width:0}
+.name input{flex:1;min-width:0;font-family:var(--f-mono);font-size:13px;border:1px solid transparent;background:var(--sunken);color:var(--fg);border-radius:6px;padding:6px 8px}
+.name input:hover{border-color:var(--line)}
+.name span{font-family:var(--f-mono);font-size:13px;color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.pill{font-size:12px;border-radius:999px;padding:2px 9px;font-weight:500;background:var(--sunken);color:var(--muted);font-variant-numeric:tabular-nums}
+.pill.ok{background:var(--ok-soft);color:var(--ok)} .pill.warn{background:var(--warn-soft);color:var(--warn)} .pill.err{background:var(--err-soft);color:var(--err)} .pill.busy{background:var(--accent-soft);color:var(--accent)}
+.small{min-height:34px;padding:5px 10px;font-size:13px;border-radius:8px}
+.msg{font-size:12.5px;color:var(--err)}
+.msg a{color:var(--accent)}
+.empty{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:18px;color:var(--muted);font-size:14px;display:flex;gap:14px;align-items:center}
+.empty svg{flex:none;width:40px;height:52px}
+
+/* barre d'envoi */
+.sendbar{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--line);z-index:5;
+  padding:10px max(16px,env(safe-area-inset-right,0px)) calc(10px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+.sendbar .in{max-width:720px;margin:0 auto;display:flex;gap:10px;align-items:center}
+.sendbar .txt{flex:1;min-width:0;font-size:13px;color:var(--muted)}
+.sendbar .txt b{color:var(--fg)}
+.banner{border-radius:10px;padding:10px 12px;font-size:13.5px;background:var(--warn-soft);color:var(--warn)}
+.banner.err{background:var(--err-soft);color:var(--err)}
+
+/* modales */
+.modal{position:fixed;inset:0;background:var(--shade);z-index:20;display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:var(--surface);width:100%;max-width:640px;max-height:88%;border-radius:16px 16px 0 0;display:flex;flex-direction:column;
+  padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (min-width:700px){.modal{align-items:center}.sheet{border-radius:16px;max-height:80%}}
+.sheet header{padding:14px 16px 10px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.sheet header .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.sheet h2{margin:0;font-size:16px}
+.bc{display:flex;flex-wrap:wrap;gap:2px;font-family:var(--f-mono);font-size:12.5px}
+.bc button{background:none;border:0;color:var(--accent);padding:2px 3px;border-radius:4px}
+.bc button[aria-current]{color:var(--fg);font-weight:500}
+.bc i{color:var(--muted);font-style:normal}
+.flist{overflow:auto;flex:1;min-height:180px}
+.frow{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--line);padding:12px 16px;color:var(--fg)}
+.frow:hover{background:var(--sunken)}
+.frow svg{width:20px;height:20px;color:var(--accent);flex:none}
+.frow span{flex:1;min-width:0;overflow-wrap:anywhere}
+.fstate{padding:24px 16px;color:var(--muted);font-size:14px}
+.sheet footer{padding:12px 16px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.sheet footer .grow{flex:1}
+.newf{display:flex;gap:8px;width:100%}
+.newf input{flex:1;min-width:0;font:inherit;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--bg);color:var(--fg)}
+
+/* éditeur */
+.editor{position:fixed;inset:0;background:var(--sunken);z-index:30;display:flex;flex-direction:column;
+  padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
+.ed-top,.ed-bot{display:flex;gap:8px;align-items:center;padding:10px 12px;background:var(--surface);flex-wrap:wrap}
+.ed-top{border-bottom:1px solid var(--line)} .ed-bot{border-top:1px solid var(--line)}
+.ed-top h2{margin:0;font-size:15px;flex:1}
+.stage{flex:1;position:relative;overflow:hidden;touch-action:none;display:flex;align-items:center;justify-content:center}
+.stage canvas{display:block;max-width:100%;max-height:100%}
+.stage svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.ed-bot .grow{flex:1}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{border:0;background:var(--surface);color:var(--fg);padding:8px 12px;font-size:13px;min-height:40px}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg)}
+.dropcover{position:fixed;inset:0;z-index:40;background:var(--shade);display:flex;align-items:center;justify-content:center;color:#fff;font-size:18px;font-weight:600;pointer-events:none}
+@media (prefers-reduced-motion:no-preference){.btn,.frow{transition:border-color .15s,background .15s}}
+@media (max-width:420px){.big{min-height:84px}.big small{display:none}}
+.account{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+.account #accName{font-family:var(--f-mono);overflow-wrap:anywhere}
+.signin{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.signin p{margin:0;color:var(--muted);font-size:14px}
+header.top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Scanner de factures</h1>
+      <p class="sub">Photographiez ou importez un justificatif, il est recadré puis envoyé dans votre OneDrive.</p>
+    </div>
+    <div class="account" id="account" hidden>
+      <span id="accName"></span>
+      <button class="btn ghost small" id="signOutBtn" type="button" hidden>Se déconnecter</button>
+    </div>
+  </header>
+
+  <section class="signin" id="signinBox" hidden>
+    <p>Connectez votre compte Microsoft pour envoyer les documents dans OneDrive.</p>
+    <button class="btn primary" id="signInBtn" type="button">Se connecter avec Microsoft</button>
+  </section>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <section class="dest" aria-label="Dossier de destination">
+    <div class="info">
+      <div class="label">Envoyer dans</div>
+      <div class="crumbs" id="destPath">…</div>
+      <div class="hint" id="destHint"></div>
+    </div>
+    <button class="btn" id="chooseDest" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      Changer
+    </button>
+  </section>
+
+  <div class="actions">
+    <label class="btn primary big" for="camInput">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.6"/></svg>
+      Prendre une photo
+      <small>Cadrage et rognage automatiques</small>
+      <input id="camInput" type="file" accept="image/*" capture="environment">
+    </label>
+    <label class="btn big" for="fileInput">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5"/><path d="M4 14v5h16v-5"/></svg>
+      Importer des fichiers
+      <small>Photos ou PDF, un ou plusieurs</small>
+      <input id="fileInput" type="file" accept="image/*,application/pdf,.pdf" multiple>
+    </label>
+  </div>
+  <div class="drop" id="drop">Ou glissez ici vos photos et PDF, un par un ou par lots.</div>
+
+  <div class="opts">
+    <label><input type="checkbox" id="optPdf" checked> Convertir les photos en PDF</label>
+    <label><input type="checkbox" id="optBw"> Photos en noir et blanc</label>
+  </div>
+
+  <div class="qhead">
+    <div class="label" id="qcount">File d'attente</div>
+    <button class="btn ghost small" id="clearDone" type="button" hidden>Retirer les envoyés</button>
+  </div>
+  <div class="queue" id="queue"></div>
+</div>
+
+<div class="sendbar">
+  <div class="in">
+    <div class="txt" id="sendTxt">Aucun document à envoyer.</div>
+    <button class="btn primary" id="sendBtn" type="button" disabled>Envoyer</button>
+  </div>
+</div>
+
+<div class="modal" id="folderModal" hidden role="dialog" aria-modal="true" aria-labelledby="fmTitle">
+  <div class="sheet">
+    <header>
+      <div class="top"><h2 id="fmTitle">Choisir un dossier</h2><button class="btn ghost small" id="fmClose" type="button">Fermer</button></div>
+      <nav class="bc" id="fmCrumbs" aria-label="Chemin"></nav>
+    </header>
+    <div class="flist" id="fmList"></div>
+    <footer>
+      <div class="newf" id="newfRow" hidden>
+        <input id="newfName" type="text" placeholder="Nom du nouveau dossier" maxlength="120">
+        <button class="btn small" id="newfOk" type="button">Créer</button>
+        <button class="btn ghost small" id="newfCancel" type="button">Annuler</button>
+      </div>
+      <button class="btn ghost small" id="newfBtn" type="button">+ Nouveau dossier</button>
+      <span class="grow"></span>
+      <button class="btn primary" id="fmPick" type="button">Envoyer ici</button>
+    </footer>
+  </div>
+</div>
+
+<div class="editor" id="editor" hidden role="dialog" aria-modal="true" aria-labelledby="edTitle">
+  <div class="ed-top">
+    <h2 id="edTitle">Ajuster le cadrage</h2>
+    <button class="btn small" id="edAuto" type="button">Cadrage auto</button>
+    <button class="btn small" id="edFull" type="button">Image entière</button>
+  </div>
+  <div class="stage" id="stage"><canvas id="edCanvas"></canvas><svg id="edSvg"></svg></div>
+  <div class="ed-bot">
+    <button class="btn small" id="edRotL" type="button" aria-label="Pivoter à gauche">⟲ 90°</button>
+    <button class="btn small" id="edRotR" type="button" aria-label="Pivoter à droite">⟳ 90°</button>
+    <span class="pill" id="edRotInfo">0°</span>
+    <div class="seg" role="group" aria-label="Couleur"><button type="button" id="edColor" aria-pressed="true">Couleur</button><button type="button" id="edBw" aria-pressed="false">N&amp;B</button></div>
+    <span class="grow"></span>
+    <button class="btn ghost" id="edCancel" type="button">Annuler</button>
+    <button class="btn primary" id="edOk" type="button">Valider</button>
+  </div>
+</div>
+
+<div class="dropcover" id="dropcover" hidden>Déposez les fichiers pour les ajouter</div>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>
