@@ -185,7 +185,7 @@ header.top{display:flex;justify-content:space-between;align-items:flex-start;gap
     <label class="btn primary big" for="camInput">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.6"/></svg>
       Prendre une photo
-      <small>Cadrage et rognage automatiques</small>
+      <small>Cadrage automatique, ajustable</small>
       <input id="camInput" type="file" accept="image/*" capture="environment">
     </label>
     <label class="btn big" for="fileInput">
@@ -238,7 +238,7 @@ header.top{display:flex;justify-content:space-between;align-items:flex-start;gap
 
 <div class="editor" id="editor" hidden role="dialog" aria-modal="true" aria-labelledby="edTitle">
   <div class="ed-top">
-    <h2 id="edTitle">Ajuster le cadrage</h2>
+    <h2 id="edTitle">Rogner et redresser <small style="display:block;font-weight:400;font-size:12px;color:var(--muted)">Glissez les coins ou les bords sur le document</small></h2>
     <button class="btn small" id="edAuto" type="button">Cadrage auto</button>
     <button class="btn small" id="edFull" type="button">Image entière</button>
   </div>

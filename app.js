@@ -257,7 +257,7 @@ function addFiles(list, fromCamera){
     if (!isPdf && !isImg) { skipped++; continue; }
     const now = new Date();
     const it = { id: ++seq, file: f, kind: isPdf ? "pdf" : "image", status: "queued", msg: "", out: null, outType: "", thumb: "",
-      corners: null, auto: null, rot: 0, bw: opt.bw, w: 0, h: 0,
+      corners: null, auto: null, rot: 0, bw: opt.bw, w: 0, h: 0, review: !!fromCamera && isImg,
       base: fromCamera || (isImg && /^(image|photo)\.\w+$|^IMG|^PXL_|^\d{8}_\d{6}/i.test(f.name)) ? "Scan_" + stamp(now) : baseName(f.name) };
     items.push(it);
   }
@@ -276,6 +276,7 @@ async function pump(){
       try { await prepare(it); it.status = it.msg && it.tooBig ? "error" : "ready"; }
       catch(e) { it.status = "error"; it.msg = "Lecture impossible : " + (e && e.message || e); }
       render();
+      if (it.review && it.status === "ready" && !ed) { it.review = false; await openEditor(it); }
     }
   } finally { pumping = false; }
 }
@@ -443,7 +444,7 @@ function quadFromMask(m, w, h){
       if (y < h-1 && m[i+w] && !lab[i+w]) { lab[i+w] = cur; st.push(i+w); } }
     if (n > best) { best = n; bestLab = cur; } }
   const frac = best / (w * h);
-  if (frac < .08 || frac > .985) return null;
+  if (frac < .2 || frac > .985) return null;
   const pts = [];
   for (let y = 0; y < h; y++) { let a = -1, b = -1; for (let x = 0; x < w; x++) if (lab[y*w + x] === bestLab) { if (a < 0) a = x; b = x; }
     if (a >= 0) { pts.push([a, y], [b + 1, y], [a, y + 1], [b + 1, y + 1]); } }
@@ -455,8 +456,15 @@ function quadFromMask(m, w, h){
   const fill = best / qa, cover = qa / ha;
   // pénalise un quadrilatère qui touche tout le bord de l'image (fond détecté)
   const touch = q.filter(([x, y]) => x < 2 || y < 2 || x > w - 2 || y > h - 2).length;
-  const score = Math.min(1, fill) * .6 + Math.min(1, cover) * .4 - touch * .08 - (frac > .93 ? .1 : 0);
-  return {pts: orderQuad(q), score, frac};
+  const oq = orderQuad(q);
+  // un document photographié de face a des angles proches de 90° : on écarte les formes trop biaisées
+  let worst = 0;
+  for (let i = 0; i < 4; i++) { const a = oq[(i + 3) % 4], b = oq[i], c = oq[(i + 1) % 4];
+    const v1 = [a[0]-b[0], a[1]-b[1]], v2 = [c[0]-b[0], c[1]-b[1]];
+    const ang = Math.acos(Math.max(-1, Math.min(1, (v1[0]*v2[0] + v1[1]*v2[1]) / ((Math.hypot(...v1) * Math.hypot(...v2)) || 1)))) * 180 / Math.PI;
+    worst = Math.max(worst, Math.abs(ang - 90)); }
+  const score = Math.min(1, fill) * .6 + Math.min(1, cover) * .4 - touch * .08 - (frac > .93 ? .1 : 0) - (worst > 25 ? .6 : worst > 15 ? .35 : 0);
+  return {pts: oq, score, frac};
 }
 function convexHull(p){
   const pts = p.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -585,26 +593,41 @@ function edRender(){
   const P = ed.corners.map(([x, y]) => [g.ox + x * g.k, g.oy + y * g.k]);
   const ns = "http://www.w3.org/2000/svg";
   svg.textContent = "";
+  const r = g.r, sr = $("stage").getBoundingClientRect();
+  const x0 = r.left - sr.left, y0 = r.top - sr.top, x1 = x0 + r.width, y1 = y0 + r.height;
+  const scrim = document.createElementNS(ns, "path");
+  scrim.setAttribute("d", "M" + x0 + "," + y0 + "H" + x1 + "V" + y1 + "H" + x0 + "Z M" + P.map(p => p.join(",")).join(" L") + "Z");
+  scrim.setAttribute("fill", "rgba(0,0,0,.45)"); scrim.setAttribute("fill-rule", "evenodd"); svg.append(scrim);
   const poly = document.createElementNS(ns, "polygon");
   poly.setAttribute("points", P.map(p => p.join(",")).join(" "));
-  poly.setAttribute("fill", "rgba(80,130,255,.16)"); poly.setAttribute("stroke", "var(--accent)"); poly.setAttribute("stroke-width", "2.5");
+  poly.setAttribute("fill", "none"); poly.setAttribute("stroke", "var(--accent)"); poly.setAttribute("stroke-width", "2.5");
   svg.append(poly);
   P.forEach(([x, y]) => { const c = document.createElementNS(ns, "circle"); c.setAttribute("cx", x); c.setAttribute("cy", y); c.setAttribute("r", 13);
     c.setAttribute("fill", "var(--surface)"); c.setAttribute("stroke", "var(--accent)"); c.setAttribute("stroke-width", "3"); svg.append(c); });
+  edgeMids(P).forEach(([x, y], i) => { const c = document.createElementNS(ns, "rect"); const hz = i % 2 === 0;
+    c.setAttribute("x", x - (hz ? 16 : 6)); c.setAttribute("y", y - (hz ? 6 : 16)); c.setAttribute("width", hz ? 32 : 12); c.setAttribute("height", hz ? 12 : 32); c.setAttribute("rx", 6);
+    c.setAttribute("fill", "var(--surface)"); c.setAttribute("stroke", "var(--accent)"); c.setAttribute("stroke-width", "2.5"); svg.append(c); });
   $("edRotInfo").textContent = "Rotation " + ed.rot + "°";
   $("edColor").setAttribute("aria-pressed", String(!ed.bw)); $("edBw").setAttribute("aria-pressed", String(ed.bw));
 }
+function edgeMids(P){ return [0, 1, 2, 3].map(i => { const a = P[i], b = P[(i + 1) % 4]; return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; }); }
 const stageEl = $("stage");
 stageEl.addEventListener("pointerdown", e => {
   if (!ed) return; const g = edGeom(), sr = stageEl.getBoundingClientRect();
   const px = e.clientX - sr.left, py = e.clientY - sr.top; let best = -1, bd = 44;
-  ed.corners.forEach(([x, y], i) => { const d = Math.hypot(g.ox + x * g.k - px, g.oy + y * g.k - py); if (d < bd) { bd = d; best = i; } });
-  if (best >= 0) { ed.drag = best; stageEl.setPointerCapture(e.pointerId); e.preventDefault(); }
+  const P = ed.corners.map(([x, y]) => [g.ox + x * g.k, g.oy + y * g.k]);
+  P.forEach(([x, y], i) => { const d = Math.hypot(x - px, y - py); if (d < bd) { bd = d; best = i; } });
+  edgeMids(P).forEach(([x, y], i) => { const d = Math.hypot(x - px, y - py) + 6; if (d < bd) { bd = d; best = 4 + i; } });
+  if (best >= 0) { ed.drag = best; ed.last = [(px - g.ox) / g.k, (py - g.oy) / g.k]; stageEl.setPointerCapture(e.pointerId); e.preventDefault(); }
 });
 stageEl.addEventListener("pointermove", e => {
   if (!ed || ed.drag < 0) return; const g = edGeom(), sr = stageEl.getBoundingClientRect();
   const x = (e.clientX - sr.left - g.ox) / g.k, y = (e.clientY - sr.top - g.oy) / g.k;
-  ed.corners[ed.drag] = [Math.max(0, Math.min(ed.src.width, x)), Math.max(0, Math.min(ed.src.height, y))]; edRender();
+  const clamp = ([u, v]) => [Math.max(0, Math.min(ed.src.width, u)), Math.max(0, Math.min(ed.src.height, v))];
+  if (ed.drag < 4) ed.corners[ed.drag] = clamp([x, y]);
+  else { const i = ed.drag - 4, j = (i + 1) % 4, dx = x - ed.last[0], dy = y - ed.last[1];
+    ed.corners[i] = clamp([ed.corners[i][0] + dx, ed.corners[i][1] + dy]); ed.corners[j] = clamp([ed.corners[j][0] + dx, ed.corners[j][1] + dy]); }
+  ed.last = [x, y]; edRender();
 });
 const endDrag = () => { if (ed) ed.drag = -1; };
 stageEl.addEventListener("pointerup", endDrag); stageEl.addEventListener("pointercancel", endDrag);
@@ -715,7 +738,7 @@ function render(){
     const act = document.createElement("div"); act.className = "row";
     const busy = it.status === "processing" || it.status === "sending" || sending;
     if (it.kind === "image" && it.status !== "sent") {
-      act.append(mkBtn("Ajuster", () => openEditor(it), busy), mkBtn("⟲", () => quickRotate(it, -90), busy, "Pivoter à gauche"), mkBtn("⟳", () => quickRotate(it, 90), busy, "Pivoter à droite"));
+      act.append(mkBtn("Rogner", () => openEditor(it), busy), mkBtn("⟲", () => quickRotate(it, -90), busy, "Pivoter à gauche"), mkBtn("⟳", () => quickRotate(it, 90), busy, "Pivoter à droite"));
     }
     if (it.status !== "sent") act.append(mkBtn("Retirer", () => { items = items.filter(x => x !== it); if (it.thumb) URL.revokeObjectURL(it.thumb); render(); }, busy));
     if (act.childNodes.length) m.append(act);
