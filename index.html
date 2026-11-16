@@ -147,6 +147,13 @@ button:focus-visible,input:focus-visible,label.btn:focus-within{outline:2px soli
 .signin p{margin:0;color:var(--muted);font-size:14px}
 header.top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
 
+.track{display:flex;flex-direction:column;gap:10px;order:10}
+.runbox{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.tlist{display:flex;flex-direction:column;gap:8px}
+.trow{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.tname{font-family:var(--f-mono);font-size:13px;color:var(--fg);overflow-wrap:anywhere;text-decoration:none}
+a.tname{color:var(--accent)}
+.wrap>.queue{order:5}
 </style>
 </head>
 <body>
@@ -201,6 +208,22 @@ header.top{display:flex;justify-content:space-between;align-items:flex-start;gap
     <label><input type="checkbox" id="optPdf" checked> Convertir les photos en PDF</label>
     <label><input type="checkbox" id="optBw"> Photos en noir et blanc</label>
   </div>
+
+  <section class="track" id="track" hidden aria-labelledby="trackTitle">
+    <div class="qhead">
+      <div class="label" id="trackTitle">Suivi des envois</div>
+      <button class="btn ghost small" id="trackRefresh" type="button">Actualiser</button>
+    </div>
+    <div class="runbox">
+      <button class="btn" id="runNow" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 4.5v15l12-7.5z"/></svg>
+        Lancer le traitement maintenant
+      </button>
+      <div class="hint" id="runMsg">Renomme, classe et rapproche avec Qonto sans attendre 7 h 38.</div>
+    </div>
+    <div class="hint" id="trackInfo"></div>
+    <div class="tlist" id="trackList"></div>
+  </section>
 
   <div class="qhead">
     <div class="label" id="qcount">File d'attente</div>

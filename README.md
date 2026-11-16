@@ -32,3 +32,19 @@ Static Site relié à ce dépôt, Build Command vide, Publish Directory `.` (ou 
 python3 -m http.server 8765
 ```
 puis http://localhost:8765/
+
+## Lancement manuel du traitement (dossier `api/`)
+
+Le bouton « Lancer le traitement maintenant » appelle un petit service (`api/server.js`, sans dépendance) qui vérifie le compte Microsoft de l'utilisateur puis déclenche la tâche planifiée Claude « Traitement des factures » par son API.
+
+Render, Web Service gratuit relié à ce dépôt :
+- Root Directory : `api` ; Build Command : vide (ou `npm install`) ; Start Command : `node server.js`
+- Variables d'environnement :
+  - `ROUTINE_ID` : identifiant de la tâche planifiée (`trig_…`)
+  - `ROUTINE_TOKEN` : jeton API de la tâche (claude.ai/code/routines → la tâche → Modifier → + API → Generate token) — **secret, uniquement dans Render**
+  - `ALLOWED_EMAILS` : comptes autorisés à lancer, séparés par des virgules
+  - `ALLOWED_ORIGINS` : `https://scanner-factures.onrender.com`
+
+## Suivi
+
+La section « Suivi des envois » relit chaque document envoyé depuis cet appareil : renommé (nom `AAAAMMJJ_FOURNISSEUR_MONTANT€TTC`), classé (dans `Fournisseurs/…` ou `À vérifier`) et rapproché (colonne « Transaction Qonto » de `Dépenses 2026.xlsx`).

@@ -127,6 +127,7 @@ async function boot(){
         auth.user = {id: me.id, name: me.displayName, mail: me.mail || me.userPrincipalName}; store.set("scanner.user", auth.user); }
       sessionStorage.removeItem("scanner.silentTried");
       await initDest();
+      refreshTracking();
     } catch(e) { showBanner(errText(e), true); }
   }
   render();
@@ -692,19 +693,112 @@ async function sendAll(){
       const res = await uploadBlob(target.id, filename, it.out);
       it.webUrl = res && res.webUrl || ""; it.sentName = res && res.name || filename; it.sentTo = where;
       it.status = "sent";
+      if (res && res.id) addHist({ id: res.id, name: it.sentName, webUrl: it.webUrl, at: Date.now() });
     } catch(e) { it.status = "error"; it.sendFailed = true; it.msg = errText(e); }
     render();
   }
-  sending = false; render();
+  sending = false; render(); renderTracking();
+  setTimeout(refreshTracking, 1500);
 }
 $("sendBtn").onclick = sendAll;
 $("clearDone").onclick = () => { items = items.filter(x => { if (x.status === "sent") { if (x.thumb) URL.revokeObjectURL(x.thumb); return false; } return true; }); render(); };
+
+
+/* ---------- Suivi : renommage, classement, rapprochement ---------- */
+const API_URL = (CFG.apiUrl || "").replace(/\/$/, "");
+const EXPENSES_PATH = CFG.expensesPath || "";
+function histKey(){ return "scanner.hist." + (auth.user ? auth.user.id : ""); }
+function loadHist(){ return store.get(histKey(), []); }
+function addHist(e){ const h = loadHist().filter(x => x.id !== e.id); h.unshift(e); store.set(histKey(), h.slice(0, 40)); }
+let trackState = { rows: [], loading: false, at: 0, err: "" };
+
+async function refreshTracking(){
+  if (!auth.signedIn || trackState.loading) return;
+  const hist = loadHist();
+  trackState.loading = true; trackState.err = ""; renderTracking();
+  try {
+    const info = {};
+    for (let i = 0; i < hist.length; i += 20) {
+      const chunk = hist.slice(i, i + 20);
+      const r = await graph("/$batch", { method: "POST", json: { requests: chunk.map((h, k) => ({ id: String(k), method: "GET",
+        url: "/me/drive/items/" + h.id + "?$select=id,name,webUrl,parentReference" })) } });
+      for (const resp of r.responses) { const h = chunk[+resp.id]; info[h.id] = resp.status === 200 ? resp.body : { missing: true }; }
+    }
+    let qonto = {};
+    if (EXPENSES_PATH) {
+      try {
+        const p = EXPENSES_PATH.split("/").map(encodeURIComponent).join("/");
+        const u = await graph("/me/drive/root:/" + p + ":/workbook/worksheets('D%C3%A9penses')/usedRange(valuesOnly=true)?$select=values");
+        const vals = u.values || [], head = vals[0] || [];
+        const iName = head.findIndex(x => /justificatif/i.test(x)), iQ = head.findIndex(x => /qonto/i.test(x));
+        for (const row of vals.slice(1)) if (row[iName]) qonto[String(row[iName]).trim()] = String(row[iQ] || "").trim();
+      } catch(e) { /* tableau absent ou illisible : le rapprochement s'affiche « inconnu » */ }
+    }
+    trackState.rows = hist.map(h => {
+      const it = info[h.id] || {};
+      const path = it.parentReference && it.parentReference.path ? decodeURIComponent(it.parentReference.path.replace(/^.*root:/, "")) : "";
+      const name = it.name || h.name;
+      const renamed = /^\d{8}_.+€TTC\.\w+$/.test(name);
+      const where = /\/Fournisseurs\//.test(path) ? "classe" : /À vérifier/.test(path) ? "verifier" : it.missing ? "absent" : "attente";
+      const q = qonto[name] || "";
+      const matched = /joint|déjà justifi/i.test(q) ? "ok" : /valider/i.test(q) ? "valider" : q ? "autre" : "";
+      return { ...h, name, webUrl: it.webUrl || h.webUrl, path, renamed, where, q, matched };
+    });
+    trackState.at = Date.now();
+  } catch(e) { trackState.err = errText(e); }
+  trackState.loading = false; renderTracking();
+}
+
+function chip(text, cls, title){ const s = document.createElement("span"); s.className = "pill " + (cls || ""); s.textContent = text; if (title) s.title = title; return s; }
+function renderTracking(){
+  const box = $("track"); if (!box) return;
+  box.hidden = !auth.signedIn;
+  const list = $("trackList"); list.textContent = "";
+  $("trackRefresh").disabled = trackState.loading;
+  $("trackInfo").textContent = trackState.loading ? "Mise à jour…" : trackState.err ? trackState.err
+    : trackState.at ? "Mis à jour à " + new Date(trackState.at).toLocaleTimeString("fr-FR", {hour: "2-digit", minute: "2-digit"}) : "";
+  const rows = trackState.rows.length ? trackState.rows : loadHist().map(h => ({...h, pending: true}));
+  if (!rows.length) { list.innerHTML = '<div class="fstate">Les documents envoyés apparaîtront ici avec leur état de traitement.</div>'; return; }
+  for (const r of rows) {
+    const el = document.createElement("div"); el.className = "trow";
+    const nm = document.createElement(r.webUrl ? "a" : "div"); nm.className = "tname"; nm.textContent = r.name;
+    if (r.webUrl) { nm.href = r.webUrl; nm.target = "_blank"; nm.rel = "noopener"; }
+    const chips = document.createElement("div"); chips.className = "row";
+    if (r.pending) chips.append(chip("Envoyé", "ok"));
+    else if (r.where === "absent") chips.append(chip("Introuvable", "warn", "Déplacé hors de portée ou supprimé"));
+    else {
+      chips.append(r.renamed ? chip("✓ Renommé", "ok") : chip("○ À renommer", ""));
+      chips.append(r.where === "classe" ? chip("✓ Classé", "ok", r.path) : r.where === "verifier" ? chip("! À vérifier", "warn", r.path) : chip("○ À classer", ""));
+      chips.append(r.matched === "ok" ? chip("✓ Rapproché", "ok", r.q) : r.matched === "valider" ? chip("… Qonto à valider", "warn", "Validez le rattachement dans le fil Claude") : r.q ? chip(r.q, "") : chip("○ Rapprochement", ""));
+    }
+    const when = document.createElement("div"); when.className = "hint"; when.textContent = "Envoyé le " + new Date(r.at).toLocaleString("fr-FR", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
+    el.append(nm, chips, when); list.append(el);
+  }
+}
+$("trackRefresh").onclick = refreshTracking;
+
+async function runNow(){
+  const btn = $("runNow"), msg = $("runMsg");
+  if (!API_URL) { msg.textContent = "Le service de lancement n'est pas encore configuré."; return; }
+  btn.disabled = true; msg.className = "hint"; msg.textContent = "Lancement… (jusqu'à 1 minute si le service était en veille)";
+  try {
+    const token = await getToken();
+    const r = await fetch(API_URL + "/run", { method: "POST", headers: { Authorization: "Bearer " + token } });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    msg.textContent = "Traitement lancé. Le compte rendu arrivera dans Claude ; actualisez le suivi dans quelques minutes.";
+    store.set("scanner.lastRun", Date.now());
+  } catch(e) { msg.className = "msg"; msg.textContent = "Lancement impossible : " + (e.code === "signed_out" ? "reconnectez-vous." : e.message); }
+  finally { setTimeout(() => { btn.disabled = false; }, 30000); }
+}
+$("runNow").onclick = runNow;
 
 /* ---------- Rendu ---------- */
 function fmtSize(n){ return n > 1048576 ? (n / 1048576).toFixed(1).replace(".", ",") + " Mo" : Math.max(1, Math.round(n / 1024)) + " Ko"; }
 const STATUS = { queued: ["En attente", ""], processing: ["Cadrage…", "busy"], ready: ["Prêt", ""], sending: ["Envoi…", "busy"], sent: ["Envoyé", "ok"], error: ["À corriger", "err"] };
 
 function render(){
+  renderTracking();
   renderDest(); renderAccount(); $("signinBox").hidden = auth.signedIn;
   const q = $("queue");
   q.textContent = "";

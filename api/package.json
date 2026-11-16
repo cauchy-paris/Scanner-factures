@@ -1,0 +1,9 @@
+{
+  "name": "scanner-factures-api",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Déclenche le traitement des factures depuis l'appli Scanner",
+  "main": "server.js",
+  "engines": { "node": ">=18" },
+  "scripts": { "start": "node server.js" }
+}

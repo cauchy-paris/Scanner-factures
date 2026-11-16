@@ -4,5 +4,9 @@ window.SCANNER_CONFIG = {
   tenant: "cauchy-paris.fr",    // inscription Azure mono-organisation ; "common" si multi-organisations
   // Dossier proposé par défaut à la première connexion (ignoré s'il n'existe pas dans le OneDrive connecté)
   defaultPath: ["Comptabilité", "Exercice 2026", "Achat", "Factures", "À traiter"],
+  // Service de lancement du traitement (Web Service Render du dossier api/)
+  apiUrl: "https://scanner-factures-api.onrender.com",
+  // Tableau des dépenses, pour afficher l'état « rapproché »
+  expensesPath: "Comptabilité/Exercice 2026/Achat/Factures/Dépenses 2026.xlsx",
   autoFolderNote: "Ce dossier est traité automatiquement chaque matin à 7 h 38."
 };
