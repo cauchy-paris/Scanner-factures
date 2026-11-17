@@ -225,6 +225,21 @@ a.tname{color:var(--accent)}
     <div class="tlist" id="trackList"></div>
   </section>
 
+  <section class="track" id="qontoBox" hidden aria-labelledby="qontoTitle">
+    <div class="qhead">
+      <div class="label" id="qontoTitle">Factures reçues sur Qonto</div>
+    </div>
+    <div class="runbox">
+      <button class="btn" id="qontoImport" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 19h14"/></svg>
+        Importer
+      </button>
+      <div class="hint" id="qontoMsg">Récupère les factures électroniques déposées par les fournisseurs sur Qonto depuis janvier 2026 et les ajoute au tableau, sans doublon. Vérifié aussi chaque matin à 7 h 38 (7 derniers jours).</div>
+    </div>
+    <div class="hint" id="qontoInfo"></div>
+    <div class="tlist" id="qontoList"></div>
+  </section>
+
   <div class="qhead">
     <div class="label" id="qcount">File d'attente</div>
     <button class="btn ghost small" id="clearDone" type="button" hidden>Retirer les envoyés</button>

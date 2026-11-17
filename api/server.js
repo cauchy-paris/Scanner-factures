@@ -45,13 +45,23 @@ http.createServer(async (req, res) => {
   const now = Date.now();
   if (now - lastRun < MIN_INTERVAL_MS) return send(res, origin, 429, { error: "Un traitement vient d'être lancé. Réessayez dans " + Math.ceil((MIN_INTERVAL_MS - (now - lastRun)) / 1000) + " s." });
 
-  // 3. déclenche la tâche planifiée
+  // 3. type de lancement : traitement normal, ou import de toutes les e-factures Qonto
+  let mode = "";
+  try {
+    let raw = ""; for await (const c of req) { raw += c; if (raw.length > 2000) break; }
+    mode = raw ? String((JSON.parse(raw) || {}).mode || "") : "";
+  } catch (e) { mode = ""; }
+  const text = mode === "qonto"
+    ? "Lancement manuel depuis l'appli Scanner de factures : Importer les factures Qonto (toutes les factures électroniques fournisseurs depuis le 01/01/2026, §2 bis de la procédure, avec anti-doublon), puis le traitement habituel."
+    : "Lancement manuel depuis l'appli Scanner de factures.";
+
+  // 4. déclenche la tâche planifiée
   try {
     const r = await fetch("https://api.anthropic.com/v1/claude_code/routines/" + encodeURIComponent(ROUTINE_ID) + "/fire", {
       method: "POST",
       headers: { Authorization: "Bearer " + ROUTINE_TOKEN, "anthropic-beta": "experimental-cc-routine-2026-04-01",
         "anthropic-version": "2023-06-01", "Content-Type": "application/json" },
-      body: JSON.stringify({ text: "Lancement manuel depuis l'appli Scanner de factures." })
+      body: JSON.stringify({ text })
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) return send(res, origin, 502, { error: "Claude a refusé le lancement (" + r.status + ")." + (j.error && j.error.message ? " " + j.error.message : "") });
