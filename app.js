@@ -727,18 +727,20 @@ async function refreshTracking(){
         url: "/me/drive/items/" + h.id + "?$select=id,name,webUrl,parentReference" })) } });
       for (const resp of r.responses) { const h = chunk[+resp.id]; info[h.id] = resp.status === 200 ? resp.body : { missing: true }; }
     }
-    let qonto = {};
+    let qonto = {}, motifs = {};
     if (EXPENSES_PATH) {
       try {
         const p = EXPENSES_PATH.split("/").map(encodeURIComponent).join("/");
         const u = await graph("/me/drive/root:/" + p + ":/workbook/worksheets('D%C3%A9penses')/usedRange(valuesOnly=true)?$select=values");
         const vals = u.values || [], head = vals[0] || [];
         const iName = head.findIndex(x => /justificatif/i.test(x)), iQ = head.findIndex(x => /qonto/i.test(x));
-        for (const row of vals.slice(1)) if (row[iName]) qonto[String(row[iName]).trim()] = String(row[iQ] || "").trim();
+        const iMotif = head.findIndex(x => /motif|erreur/i.test(x));
+        for (const row of vals.slice(1)) if (row[iName]) { qonto[String(row[iName]).trim()] = String(row[iQ] || "").trim(); if (iMotif >= 0 && row[iMotif]) motifs[String(row[iName]).trim()] = String(row[iMotif]).trim(); }
         const col = re => head.findIndex(x => re.test(String(x)));
         const iSrc = col(/^source/i), iD = col(/^date$/i), iF = col(/fournisseur/i), iN = col(/n° ?facture|numéro/i), iT = col(/TTC/i);
         if (iSrc >= 0) qontoRows = vals.slice(1).filter(r => /qonto e-facture/i.test(String(r[iSrc]))).map(r => ({
-          date: r[iD], dateTxt: xlDate(r[iD]), fournisseur: r[iF], numero: r[iN], ttc: r[iT], q: String(r[iQ] || "").trim() }))
+          date: r[iD], dateTxt: xlDate(r[iD]), fournisseur: r[iF], numero: r[iN], ttc: r[iT], q: String(r[iQ] || "").trim(),
+          motif: iMotif >= 0 ? String(r[iMotif] || "").trim() : "" }))
           .sort((a, b) => (+b.date || 0) - (+a.date || 0));
       } catch(e) { /* tableau absent ou illisible : le rapprochement s'affiche « inconnu » */ }
     }
@@ -750,7 +752,8 @@ async function refreshTracking(){
       const where = /\/Fournisseurs\//.test(path) ? "classe" : /À vérifier/.test(path) ? "verifier" : it.missing ? "absent" : "attente";
       const q = qonto[name] || "";
       const matched = /joint|déjà justifi/i.test(q) ? "ok" : /valider/i.test(q) ? "valider" : q ? "autre" : "";
-      return { ...h, name, webUrl: it.webUrl || h.webUrl, path, renamed, where, q, matched };
+      const motif = motifs[name] || (where === "verifier" ? "Rangé dans « À vérifier » : voir le compte rendu dans Claude." : where === "absent" ? "Fichier déplacé hors de portée ou supprimé." : "");
+      return { ...h, name, webUrl: it.webUrl || h.webUrl, path, renamed, where, q, matched, motif };
     });
     trackState.at = Date.now();
   } catch(e) { trackState.err = errText(e); }
@@ -767,17 +770,19 @@ function renderQonto(){
   $("qontoInfo").textContent = qontoRows.length
     ? qontoRows.length + " facture" + (qontoRows.length > 1 ? "s" : "") + " importée" + (qontoRows.length > 1 ? "s" : "") + " · " + eur(total) + " TTC" + (aValider ? " · " + aValider + " à valider dans Qonto" : "")
     : "Aucune facture électronique importée pour l'instant.";
-  for (const r of qontoRows.slice(0, 15)) {
+  const shown = qontoRows.filter(r => !/joint|déjà justifi/i.test(r.q)).concat(qontoRows.filter(r => /joint|déjà justifi/i.test(r.q)));
+  for (const r of shown.slice(0, 15)) {
     const el = document.createElement("div"); el.className = "trow";
     const nm = document.createElement("div"); nm.className = "tname"; nm.textContent = (r.fournisseur || "?") + " · " + eur(r.ttc);
     const chips = document.createElement("div"); chips.className = "row";
     chips.append(/joint|déjà justifi/i.test(r.q) ? chip("✓ Payée", "ok", r.q) : /valider/i.test(r.q) ? chip("… À valider", "warn", "À payer ou valider dans Qonto") : chip(r.q || "?", ""));
     const when = document.createElement("div"); when.className = "hint"; when.textContent = r.dateTxt + (r.numero ? " · n° " + r.numero : "");
-    el.append(nm, chips, when); list.append(el);
+    el.append(nm, chips); if (r.motif) el.append(motifLine(r.motif)); el.append(when); list.append(el);
   }
   if (qontoRows.length > 15) { const more = document.createElement("div"); more.className = "hint"; more.textContent = "… et " + (qontoRows.length - 15) + " autres dans le tableau des dépenses."; list.append(more); }
 }
 
+function motifLine(text){ const d = document.createElement("div"); d.className = "motif"; d.textContent = "Motif : " + text; return d; }
 function chip(text, cls, title){ const s = document.createElement("span"); s.className = "pill " + (cls || ""); s.textContent = text; if (title) s.title = title; return s; }
 function renderTracking(){
   const box = $("track"); if (!box) return;
@@ -801,7 +806,9 @@ function renderTracking(){
       chips.append(r.matched === "ok" ? chip("✓ Rapproché", "ok", r.q) : r.matched === "valider" ? chip("… Qonto à valider", "warn", "Validez le rattachement dans le fil Claude") : r.q ? chip(r.q, "") : chip("○ Rapprochement", ""));
     }
     const when = document.createElement("div"); when.className = "hint"; when.textContent = "Envoyé le " + new Date(r.at).toLocaleString("fr-FR", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
-    el.append(nm, chips, when); list.append(el);
+    el.append(nm, chips);
+    if (r.motif) el.append(motifLine(r.motif));
+    el.append(when); list.append(el);
   }
 }
 $("trackRefresh").onclick = refreshTracking;
@@ -823,7 +830,7 @@ async function importQontoPdfs(token, msg){
     if (r.ok) ledger = Object.assign(ledger, await r.json());
   } catch(e) { /* registre absent : tout est à ranger */ }
   const todo = inv.filter(f => f.attachmentId && !ledger.invoices[f.id]);
-  let added = 0, kept = 0, failed = 0;
+  let added = 0, kept = 0, failed = 0; const errors = [];
   for (const f of todo) {
     msg.textContent = "Rangement des PDF Qonto : " + (added + kept + failed + 1) + " / " + todo.length + "…";
     const rel = [f.supplier, f.date.slice(0, 4), f.fileName].map(encodeURIComponent).join("/");
@@ -838,11 +845,21 @@ async function importQontoPdfs(token, msg){
         added++;
       }
       ledger.invoices[f.id] = { file: f.supplier + "/" + f.date.slice(0, 4) + "/" + f.fileName, url: it.webUrl || "", at: new Date().toISOString().slice(0, 10) };
-    } catch(e) { failed++; }
+    } catch(e) { failed++; errors.push(f.fileName + " : " + (e.status ? errText(e) : (e.message || String(e)))); }
   }
   if (added || kept) await graph("/me/drive/items/" + CFG.automationFolderId + ":/" + LEDGER + ":/content",
     { method: "PUT", body: JSON.stringify(ledger, null, 1), headers: { "Content-Type": "application/json" } });
-  return (added ? added + " PDF rangé" + (added > 1 ? "s" : "") + " dans Fournisseurs. " : "Aucun nouveau PDF à ranger. ") + (failed ? failed + " en échec (réessayez plus tard). " : "");
+  return { text: (added ? added + " PDF rangé" + (added > 1 ? "s" : "") + " dans Fournisseurs. " : "Aucun nouveau PDF à ranger. ") + (failed ? failed + " en échec. " : ""), errors };
+}
+
+function showErrors(list){
+  const box = $("qontoErrors"); if (!box) return;
+  box.textContent = ""; box.dataset.list = JSON.stringify(list || []); box.hidden = !(list && list.length);
+  if (!list || !list.length) return;
+  const t = document.createElement("div"); t.className = "label"; t.textContent = "Erreurs de l'import (" + new Date().toLocaleString("fr-FR", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"}) + ")";
+  box.append(t);
+  for (const m of list) { const d = document.createElement("div"); d.className = "motif"; d.textContent = m; box.append(d); }
+  store.set("scanner.qontoErrors", { at: Date.now(), list });
 }
 
 async function runNow(mode){
@@ -854,14 +871,19 @@ async function runNow(mode){
     const token = await getToken();
     // réveille le service (offre gratuite Render : mise en veille), puis lance
     for (let i = 0; i < 6; i++) { try { const h = await fetch(API_URL + "/health", {cache: "no-store"}); if (h.ok) break; } catch(e) {} await new Promise(r => setTimeout(r, 8000)); }
-    let done = "";
-    if (mode) { try { done = await importQontoPdfs(token, msg); } catch(e) { done = "PDF non rangés : " + e.message + " "; } }
-    const r = await fetch(API_URL + "/run", { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify({ mode }) });
+    let done = "", errors = [];
+    if (mode) {
+      try { const res = await importQontoPdfs(token, msg); done = res.text; errors = res.errors; }
+      catch(e) { done = "PDF non rangés. "; errors = [e.message || String(e)]; }
+      showErrors(errors);
+    }
+    const report = mode ? (done + (errors.length ? "Erreurs : " + errors.join(" | ") : "Aucune erreur.")).slice(0, 1500) : "";
+    const r = await fetch(API_URL + "/run", { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify({ mode, report }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
     msg.textContent = mode ? done + "Import lancé. Les factures apparaîtront ici dans quelques minutes (bouton Actualiser du suivi)." : "Traitement lancé. Le compte rendu arrivera dans Claude ; actualisez le suivi dans quelques minutes.";
     store.set("scanner.lastRun", Date.now());
-  } catch(e) { msg.className = "msg"; msg.textContent = "Lancement impossible : " + (e.code === "signed_out" ? "reconnectez-vous." : e instanceof TypeError ? "le service de lancement ne répond pas (" + API_URL + "). Réessayez dans une minute." : e.message); }
+  } catch(e) { if (mode) showErrors([].concat($("qontoErrors") && $("qontoErrors").dataset.list ? JSON.parse($("qontoErrors").dataset.list) : [], ["Lancement du traitement : " + (e.message || e)])); msg.className = "msg"; msg.textContent = "Lancement impossible : " + (e.code === "signed_out" ? "reconnectez-vous." : e instanceof TypeError ? "le service de lancement ne répond pas (" + API_URL + "). Réessayez dans une minute." : e.message); }
   finally { setTimeout(() => { btn.disabled = false; }, 30000); }
 }
 $("runNow").onclick = () => runNow();
