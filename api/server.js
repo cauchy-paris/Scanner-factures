@@ -123,14 +123,16 @@ http.createServer(async (req, res) => {
   if (now - lastRun < MIN_INTERVAL_MS) return send(res, origin, 429, { error: "Un traitement vient d'être lancé. Réessayez dans " + Math.ceil((MIN_INTERVAL_MS - (now - lastRun)) / 1000) + " s." });
 
   // 3. type de lancement : traitement normal, ou import de toutes les e-factures Qonto
-  let mode = "";
+  let mode = "", report = "";
   try {
-    let raw = ""; for await (const c of req) { raw += c; if (raw.length > 2000) break; }
-    mode = raw ? String((JSON.parse(raw) || {}).mode || "") : "";
+    let raw = ""; for await (const c of req) { raw += c; if (raw.length > 4000) break; }
+    const b = raw ? (JSON.parse(raw) || {}) : {};
+    mode = String(b.mode || ""); report = String(b.report || "").replace(/[\r\n]+/g, " ").slice(0, 1500);
   } catch (e) { mode = ""; }
-  const text = mode === "qonto"
+  const text = (mode === "qonto"
     ? "Lancement manuel depuis l'appli Scanner de factures : Importer les factures Qonto (toutes les factures électroniques fournisseurs depuis le 01/01/2026, §2 bis de la procédure, avec anti-doublon). L'appli vient de ranger les PDF dans Fournisseurs/<NOM>/<AAAA> : mets le lien « justificatif » des lignes d'après _Automatisation/efactures_classees.json. Puis le traitement habituel."
-    : "Lancement manuel depuis l'appli Scanner de factures.";
+    : "Lancement manuel depuis l'appli Scanner de factures.")
+    + (report ? " Résultat de l'import côté appli (à recopier tel quel dans le compte rendu) : " + report : "");
 
   // 4. déclenche la tâche planifiée
   try {

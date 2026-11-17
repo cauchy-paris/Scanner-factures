@@ -155,6 +155,9 @@ header.top{display:flex;justify-content:space-between;align-items:flex-start;gap
 a.tname{color:var(--accent)}
 .wrap>.queue{order:5}
 #qontoBox{order:0}
+.motif{font-size:12.5px;color:var(--fg);background:var(--sunken);border-left:3px solid #d97706;border-radius:6px;padding:6px 8px;overflow-wrap:anywhere}
+.errbox{display:flex;flex-direction:column;gap:6px}
+.errbox .motif{border-left-color:#dc2626}
 </style>
 </head>
 <body>
@@ -199,6 +202,7 @@ a.tname{color:var(--accent)}
       </button>
       <div class="hint" id="qontoMsg">Récupère les factures électroniques déposées par les fournisseurs sur Qonto depuis janvier 2026 et les ajoute au tableau, sans doublon. Vérifié aussi chaque matin à 7 h 38 (7 derniers jours).</div>
     </div>
+    <div class="errbox" id="qontoErrors" hidden></div>
     <div class="hint" id="qontoInfo"></div>
     <div class="tlist" id="qontoList"></div>
   </section>
