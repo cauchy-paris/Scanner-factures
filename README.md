@@ -44,6 +44,7 @@ Render, Web Service gratuit relié à ce dépôt :
   - `ROUTINE_TOKEN` : jeton API de la tâche (claude.ai/code/routines → la tâche → Modifier → + API → Generate token) — **secret, uniquement dans Render**
   - `ALLOWED_EMAILS` : comptes autorisés à lancer, séparés par des virgules
   - `ALLOWED_ORIGINS` : `https://scanner-factures.onrender.com`
+  - `QONTO_LOGIN` et `QONTO_SECRET_KEY` : clé API Qonto (Qonto web → Paramètres → Intégrations et partenaires → Clé API) pour le bouton « Importer » des factures électroniques — **secret, uniquement dans Render**
 
 ## Suivi
 

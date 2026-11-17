@@ -806,6 +806,45 @@ function renderTracking(){
 }
 $("trackRefresh").onclick = refreshTracking;
 
+/* ---------- Factures électroniques Qonto : PDF rangés dans Fournisseurs/<NOM>/<AAAA> ---------- */
+const LEDGER = "efactures_classees.json";
+async function relay(path, token){
+  const r = await fetch(API_URL + path, { headers: { Authorization: "Bearer " + token } });
+  if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || ("HTTP " + r.status)); }
+  return r;
+}
+async function importQontoPdfs(token, msg){
+  if (!CFG.suppliersFolderId || !CFG.automationFolderId) return "";
+  const inv = (await (await relay("/qonto/einvoices", token)).json()).invoices || [];
+  // registre des factures déjà rangées (par id Qonto)
+  let ledger = { invoices: {} };
+  try {
+    const r = await fetch(GRAPH + "/me/drive/items/" + CFG.automationFolderId + ":/" + LEDGER + ":/content", { headers: { Authorization: "Bearer " + await getToken() } });
+    if (r.ok) ledger = Object.assign(ledger, await r.json());
+  } catch(e) { /* registre absent : tout est à ranger */ }
+  const todo = inv.filter(f => f.attachmentId && !ledger.invoices[f.id]);
+  let added = 0, kept = 0, failed = 0;
+  for (const f of todo) {
+    msg.textContent = "Rangement des PDF Qonto : " + (added + kept + failed + 1) + " / " + todo.length + "…";
+    const rel = [f.supplier, f.date.slice(0, 4), f.fileName].map(encodeURIComponent).join("/");
+    try {
+      let it = null;
+      try { it = await graph("/me/drive/items/" + CFG.suppliersFolderId + ":/" + rel + "?$select=id,webUrl"); kept++; }
+      catch(e) { if (e.status !== 404) throw e; }
+      if (!it) {
+        const pdf = await (await relay("/qonto/pdf?attachment=" + encodeURIComponent(f.attachmentId), token)).blob();
+        it = await graph("/me/drive/items/" + CFG.suppliersFolderId + ":/" + rel + ":/content?@microsoft.graph.conflictBehavior=fail",
+          { method: "PUT", body: pdf, headers: { "Content-Type": "application/pdf" } });
+        added++;
+      }
+      ledger.invoices[f.id] = { file: f.supplier + "/" + f.date.slice(0, 4) + "/" + f.fileName, url: it.webUrl || "", at: new Date().toISOString().slice(0, 10) };
+    } catch(e) { failed++; }
+  }
+  if (added || kept) await graph("/me/drive/items/" + CFG.automationFolderId + ":/" + LEDGER + ":/content",
+    { method: "PUT", body: JSON.stringify(ledger, null, 1), headers: { "Content-Type": "application/json" } });
+  return (added ? added + " PDF rangé" + (added > 1 ? "s" : "") + " dans Fournisseurs. " : "Aucun nouveau PDF à ranger. ") + (failed ? failed + " en échec (réessayez plus tard). " : "");
+}
+
 async function runNow(mode){
   mode = mode === "qonto" ? "qonto" : "";
   const btn = $(mode ? "qontoImport" : "runNow"), msg = $(mode ? "qontoMsg" : "runMsg");
@@ -815,10 +854,12 @@ async function runNow(mode){
     const token = await getToken();
     // réveille le service (offre gratuite Render : mise en veille), puis lance
     for (let i = 0; i < 6; i++) { try { const h = await fetch(API_URL + "/health", {cache: "no-store"}); if (h.ok) break; } catch(e) {} await new Promise(r => setTimeout(r, 8000)); }
+    let done = "";
+    if (mode) { try { done = await importQontoPdfs(token, msg); } catch(e) { done = "PDF non rangés : " + e.message + " "; } }
     const r = await fetch(API_URL + "/run", { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify({ mode }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
-    msg.textContent = mode ? "Import lancé. Les factures apparaîtront ici dans quelques minutes (bouton Actualiser du suivi)." : "Traitement lancé. Le compte rendu arrivera dans Claude ; actualisez le suivi dans quelques minutes.";
+    msg.textContent = mode ? done + "Import lancé. Les factures apparaîtront ici dans quelques minutes (bouton Actualiser du suivi)." : "Traitement lancé. Le compte rendu arrivera dans Claude ; actualisez le suivi dans quelques minutes.";
     store.set("scanner.lastRun", Date.now());
   } catch(e) { msg.className = "msg"; msg.textContent = "Lancement impossible : " + (e.code === "signed_out" ? "reconnectez-vous." : e instanceof TypeError ? "le service de lancement ne répond pas (" + API_URL + "). Réessayez dans une minute." : e.message); }
   finally { setTimeout(() => { btn.disabled = false; }, 30000); }

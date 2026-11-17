@@ -8,5 +8,9 @@ window.SCANNER_CONFIG = {
   apiUrl: "https://scanner-factures-api.onrender.com",
   // Tableau des dépenses, pour afficher l'état « rapproché »
   expensesPath: "Comptabilité/Exercice 2026/Achat/Factures/Dépenses 2026.xlsx",
+  // Factures électroniques Qonto : dossier « Fournisseurs » (ciblé par son id, il peut être déplacé)
+  // et registre des factures déjà rangées (dossier _Automatisation)
+  suppliersFolderId: "017P3ARQVKKZ3MJY6QCNGJGYE2TQP37RYG",
+  automationFolderId: "017P3ARQQAC45FNQBOS5GIWQLCH2Q5TZFV",
   autoFolderNote: "Ce dossier est traité automatiquement chaque matin à 7 h 38."
 };
