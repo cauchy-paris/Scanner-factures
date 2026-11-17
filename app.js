@@ -710,6 +710,18 @@ const EXPENSES_PATH = CFG.expensesPath || "";
 function histKey(){ return "scanner.hist." + (auth.user ? auth.user.id : ""); }
 function loadHist(){ return store.get(histKey(), []); }
 function addHist(e){ const h = loadHist().filter(x => x.id !== e.id); h.unshift(e); store.set(histKey(), h.slice(0, 40)); }
+function removeHist(ids){
+  const set = new Set(ids);
+  store.set(histKey(), loadHist().filter(x => !set.has(x.id)));
+  trackState.rows = trackState.rows.filter(x => !set.has(x.id));
+  renderTracking();
+}
+function askRemove(rows){
+  const n = rows.length;
+  const what = n === 1 ? "« " + rows[0].name + " »" : n + " encadrés";
+  if (!confirm("Retirer " + what + " du suivi ?\n\nSeul l'affichage dans l'appli est supprimé : aucun fichier n'est effacé dans OneDrive, et le tableau des dépenses ne change pas.")) return;
+  removeHist(rows.map(r => r.id));
+}
 let trackState = { rows: [], loading: false, at: 0, err: "" };
 let qontoRows = null; // lignes « Qonto e-facture » du tableau, null tant que non lues
 function xlDate(v){ if (typeof v === "number") { const d = new Date(Math.round((v - 25569) * 86400000)); return d.toLocaleDateString("fr-FR", {timeZone: "UTC"}); } return String(v || ""); }
@@ -792,11 +804,17 @@ function renderTracking(){
   $("trackInfo").textContent = trackState.loading ? "Mise à jour…" : trackState.err ? trackState.err
     : trackState.at ? "Mis à jour à " + new Date(trackState.at).toLocaleTimeString("fr-FR", {hour: "2-digit", minute: "2-digit"}) : "";
   const rows = trackState.rows.length ? trackState.rows : loadHist().map(h => ({...h, pending: true}));
+  const lost = rows.filter(r => r.where === "absent");
+  const bulk = $("trackClearLost"); if (bulk) { bulk.hidden = lost.length < 2; bulk.textContent = "Retirer les " + lost.length + " introuvables"; bulk.onclick = () => askRemove(lost); }
   if (!rows.length) { list.innerHTML = '<div class="fstate">Les documents envoyés apparaîtront ici avec leur état de traitement.</div>'; return; }
   for (const r of rows) {
     const el = document.createElement("div"); el.className = "trow";
+    const top = document.createElement("div"); top.className = "ttop";
     const nm = document.createElement(r.webUrl ? "a" : "div"); nm.className = "tname"; nm.textContent = r.name;
     if (r.webUrl) { nm.href = r.webUrl; nm.target = "_blank"; nm.rel = "noopener"; }
+    const del = document.createElement("button"); del.type = "button"; del.className = "tdel"; del.textContent = "✕";
+    del.title = del.ariaLabel = "Retirer cet encadré du suivi"; del.onclick = () => askRemove([r]);
+    top.append(nm, del);
     const chips = document.createElement("div"); chips.className = "row";
     if (r.pending) chips.append(chip("Envoyé", "ok"));
     else if (r.where === "absent") chips.append(chip("Introuvable", "warn", "Déplacé hors de portée ou supprimé"));
@@ -806,7 +824,7 @@ function renderTracking(){
       chips.append(r.matched === "ok" ? chip("✓ Rapproché", "ok", r.q) : r.matched === "valider" ? chip("… Qonto à valider", "warn", "Validez le rattachement dans le fil Claude") : r.q ? chip(r.q, "") : chip("○ Rapprochement", ""));
     }
     const when = document.createElement("div"); when.className = "hint"; when.textContent = "Envoyé le " + new Date(r.at).toLocaleString("fr-FR", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
-    el.append(nm, chips);
+    el.append(top, chips);
     if (r.motif) el.append(motifLine(r.motif));
     el.append(when); list.append(el);
   }
