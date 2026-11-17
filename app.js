@@ -711,6 +711,9 @@ function histKey(){ return "scanner.hist." + (auth.user ? auth.user.id : ""); }
 function loadHist(){ return store.get(histKey(), []); }
 function addHist(e){ const h = loadHist().filter(x => x.id !== e.id); h.unshift(e); store.set(histKey(), h.slice(0, 40)); }
 let trackState = { rows: [], loading: false, at: 0, err: "" };
+let qontoRows = null; // lignes « Qonto e-facture » du tableau, null tant que non lues
+function xlDate(v){ if (typeof v === "number") { const d = new Date(Math.round((v - 25569) * 86400000)); return d.toLocaleDateString("fr-FR", {timeZone: "UTC"}); } return String(v || ""); }
+function eur(v){ const n = +v; return isFinite(n) && v !== "" ? n.toLocaleString("fr-FR", {minimumFractionDigits: 2, maximumFractionDigits: 2}) + " €" : String(v || ""); }
 
 async function refreshTracking(){
   if (!auth.signedIn || trackState.loading) return;
@@ -732,6 +735,11 @@ async function refreshTracking(){
         const vals = u.values || [], head = vals[0] || [];
         const iName = head.findIndex(x => /justificatif/i.test(x)), iQ = head.findIndex(x => /qonto/i.test(x));
         for (const row of vals.slice(1)) if (row[iName]) qonto[String(row[iName]).trim()] = String(row[iQ] || "").trim();
+        const col = re => head.findIndex(x => re.test(String(x)));
+        const iSrc = col(/^source/i), iD = col(/^date$/i), iF = col(/fournisseur/i), iN = col(/n° ?facture|numéro/i), iT = col(/TTC/i);
+        if (iSrc >= 0) qontoRows = vals.slice(1).filter(r => /qonto e-facture/i.test(String(r[iSrc]))).map(r => ({
+          date: r[iD], dateTxt: xlDate(r[iD]), fournisseur: r[iF], numero: r[iN], ttc: r[iT], q: String(r[iQ] || "").trim() }))
+          .sort((a, b) => (+b.date || 0) - (+a.date || 0));
       } catch(e) { /* tableau absent ou illisible : le rapprochement s'affiche « inconnu » */ }
     }
     trackState.rows = hist.map(h => {
@@ -746,7 +754,28 @@ async function refreshTracking(){
     });
     trackState.at = Date.now();
   } catch(e) { trackState.err = errText(e); }
-  trackState.loading = false; renderTracking();
+  trackState.loading = false; renderTracking(); renderQonto();
+}
+
+function renderQonto(){
+  const box = $("qontoBox"); if (!box) return;
+  box.hidden = !auth.signedIn;
+  const list = $("qontoList"); list.textContent = "";
+  if (qontoRows === null) { $("qontoInfo").textContent = trackState.loading ? "Mise à jour…" : ""; return; }
+  const total = qontoRows.reduce((s, r) => s + (+r.ttc || 0), 0);
+  const aValider = qontoRows.filter(r => /valider/i.test(r.q)).length;
+  $("qontoInfo").textContent = qontoRows.length
+    ? qontoRows.length + " facture" + (qontoRows.length > 1 ? "s" : "") + " importée" + (qontoRows.length > 1 ? "s" : "") + " · " + eur(total) + " TTC" + (aValider ? " · " + aValider + " à valider dans Qonto" : "")
+    : "Aucune facture électronique importée pour l'instant.";
+  for (const r of qontoRows.slice(0, 15)) {
+    const el = document.createElement("div"); el.className = "trow";
+    const nm = document.createElement("div"); nm.className = "tname"; nm.textContent = (r.fournisseur || "?") + " · " + eur(r.ttc);
+    const chips = document.createElement("div"); chips.className = "row";
+    chips.append(/joint|déjà justifi/i.test(r.q) ? chip("✓ Payée", "ok", r.q) : /valider/i.test(r.q) ? chip("… À valider", "warn", "À payer ou valider dans Qonto") : chip(r.q || "?", ""));
+    const when = document.createElement("div"); when.className = "hint"; when.textContent = r.dateTxt + (r.numero ? " · n° " + r.numero : "");
+    el.append(nm, chips, when); list.append(el);
+  }
+  if (qontoRows.length > 15) { const more = document.createElement("div"); more.className = "hint"; more.textContent = "… et " + (qontoRows.length - 15) + " autres dans le tableau des dépenses."; list.append(more); }
 }
 
 function chip(text, cls, title){ const s = document.createElement("span"); s.className = "pill " + (cls || ""); s.textContent = text; if (title) s.title = title; return s; }
@@ -777,30 +806,32 @@ function renderTracking(){
 }
 $("trackRefresh").onclick = refreshTracking;
 
-async function runNow(){
-  const btn = $("runNow"), msg = $("runMsg");
+async function runNow(mode){
+  mode = mode === "qonto" ? "qonto" : "";
+  const btn = $(mode ? "qontoImport" : "runNow"), msg = $(mode ? "qontoMsg" : "runMsg");
   if (!API_URL) { msg.textContent = "Le service de lancement n'est pas encore configuré."; return; }
   btn.disabled = true; msg.className = "hint"; msg.textContent = "Lancement… (jusqu'à 1 minute si le service était en veille)";
   try {
     const token = await getToken();
     // réveille le service (offre gratuite Render : mise en veille), puis lance
     for (let i = 0; i < 6; i++) { try { const h = await fetch(API_URL + "/health", {cache: "no-store"}); if (h.ok) break; } catch(e) {} await new Promise(r => setTimeout(r, 8000)); }
-    const r = await fetch(API_URL + "/run", { method: "POST", headers: { Authorization: "Bearer " + token } });
+    const r = await fetch(API_URL + "/run", { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify({ mode }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
-    msg.textContent = "Traitement lancé. Le compte rendu arrivera dans Claude ; actualisez le suivi dans quelques minutes.";
+    msg.textContent = mode ? "Import lancé. Les factures apparaîtront ici dans quelques minutes (bouton Actualiser du suivi)." : "Traitement lancé. Le compte rendu arrivera dans Claude ; actualisez le suivi dans quelques minutes.";
     store.set("scanner.lastRun", Date.now());
   } catch(e) { msg.className = "msg"; msg.textContent = "Lancement impossible : " + (e.code === "signed_out" ? "reconnectez-vous." : e instanceof TypeError ? "le service de lancement ne répond pas (" + API_URL + "). Réessayez dans une minute." : e.message); }
   finally { setTimeout(() => { btn.disabled = false; }, 30000); }
 }
-$("runNow").onclick = runNow;
+$("runNow").onclick = () => runNow();
+$("qontoImport").onclick = () => runNow("qonto");
 
 /* ---------- Rendu ---------- */
 function fmtSize(n){ return n > 1048576 ? (n / 1048576).toFixed(1).replace(".", ",") + " Mo" : Math.max(1, Math.round(n / 1024)) + " Ko"; }
 const STATUS = { queued: ["En attente", ""], processing: ["Cadrage…", "busy"], ready: ["Prêt", ""], sending: ["Envoi…", "busy"], sent: ["Envoyé", "ok"], error: ["À corriger", "err"] };
 
 function render(){
-  renderTracking();
+  renderTracking(); renderQonto();
   renderDest(); renderAccount(); $("signinBox").hidden = auth.signedIn;
   const q = $("queue");
   q.textContent = "";
