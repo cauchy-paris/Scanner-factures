@@ -313,7 +313,17 @@ async function prepare(it){
   it.msg = ""; it.tooBig = false;
   if (it.kind === "pdf") {
     it.out = it.file; it.outType = "application/pdf";
-    if (it.file.size > MAX_UPLOAD) { it.tooBig = true; it.msg = "PDF trop lourd (" + fmtSize(it.file.size) + ")."; }
+    // PDF scanné (sans texte) : illisible par le traitement automatique, on l'envoie en JPEG
+    try {
+      const conv = await scannedPdfToJpeg(it.file);
+      if (conv) {
+        it.out = conv.jpg; it.outType = "image/jpeg"; it.converted = true;
+        if (it.thumb) URL.revokeObjectURL(it.thumb);
+        it.thumb = URL.createObjectURL(conv.thumb);
+        it.msg = "PDF scanné converti en JPEG (" + conv.pages + " page" + (conv.pages > 1 ? "s" : "") + ") pour être lu automatiquement.";
+      }
+    } catch(e) { /* conversion impossible : on garde le PDF tel quel */ }
+    if (it.out.size > MAX_UPLOAD) { it.tooBig = true; it.msg = "PDF trop lourd (" + fmtSize(it.file.size) + ")."; }
     return;
   }
   const src = await loadSource(it);
@@ -657,8 +667,84 @@ async function quickRotate(it, delta){
   render();
 }
 
+/* ---------- PDF scannés → JPEG (pdf.js, chargé à la demande) ---------- */
+const PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+let pdfjsReady = null;
+function loadPdfJs(){
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (!pdfjsReady) pdfjsReady = new Promise((res, rej) => {
+    const sc = document.createElement("script"); sc.src = PDFJS + "pdf.min.js";
+    sc.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + "pdf.worker.min.js"; res(window.pdfjsLib); };
+    sc.onerror = () => { pdfjsReady = null; rej(new Error("lecteur PDF indisponible (connexion ?)")); };
+    document.head.append(sc);
+  });
+  return pdfjsReady;
+}
+// Renvoie null si le PDF contient du texte (lisible tel quel), sinon {jpg, thumb, pages}
+async function scannedPdfToJpeg(blob){
+  const lib = await loadPdfJs();
+  const pdf = await lib.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) }).promise;
+  try {
+    const n = Math.min(pdf.numPages, 6);
+    let chars = 0;
+    for (let i = 1; i <= n; i++) {
+      const tc = await (await pdf.getPage(i)).getTextContent();
+      chars += tc.items.reduce((k, t) => k + (t.str || "").replace(/\s/g, "").length, 0);
+    }
+    if (chars >= 30 * n) return null;
+    const width = 1600, pages = [];
+    for (let i = 1; i <= n; i++) {
+      const page = await pdf.getPage(i), v1 = page.getViewport({ scale: 1 });
+      const vp = page.getViewport({ scale: width / v1.width });
+      const c = document.createElement("canvas"); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+      const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height);
+      await page.render({ canvasContext: g, viewport: vp }).promise;
+      pages.push(c);
+    }
+    // pages empilées dans une seule image (hauteur limitée pour rester lisible)
+    const total = pages.reduce((h, c) => h + c.height, 0), k = Math.min(1, 9000 / total);
+    const out = document.createElement("canvas"); out.width = Math.round(width * k); out.height = Math.round(total * k);
+    const g = out.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, out.width, out.height);
+    let y = 0; for (const c of pages) { g.drawImage(c, 0, y, c.width * k, c.height * k); y += c.height * k; }
+    const jpg = await encodeJpeg(out, PHOTO_TARGET);
+    const t = toCanvas(out, 240);
+    return { jpg, thumb: await new Promise(r => t.toBlob(r, "image/jpeg", .8)), pages: pdf.numPages };
+  } finally { pdf.destroy(); }
+}
+// Avant un lancement : convertit les PDF scannés déjà présents dans « À traiter ».
+// L'original est déplacé (pas supprimé) dans _Automatisation/PDF scannés d'origine.
+async function convertScannedInInbox(msg){
+  const path = (CFG.defaultPath || []).map(encodeURIComponent).join("/");
+  if (!path) return { done: [], errors: [] };
+  const list = await graph("/me/drive/root:/" + path + ":/children?$select=id,name,file,parentReference&$top=200");
+  const pdfs = (list.value || []).filter(f => f.file && /\.pdf$/i.test(f.name));
+  const done = [], errors = [];
+  let keep = null;
+  for (const f of pdfs) {
+    msg.textContent = "Vérification des PDF de « À traiter » : " + f.name + "…";
+    try {
+      const r = await fetch(GRAPH + "/me/drive/items/" + f.id + "/content", { headers: { Authorization: "Bearer " + await getToken() } });
+      if (!r.ok) throw new Error("téléchargement HTTP " + r.status);
+      const conv = await scannedPdfToJpeg(await r.blob());
+      if (!conv) continue;
+      const res = await uploadBlob(f.parentReference.id, baseName(f.name) + ".jpg", conv.jpg);
+      if (!keep && CFG.automationFolderId) {
+        try { keep = await graph("/me/drive/items/" + CFG.automationFolderId + ":/PDF scannés d'origine?$select=id"); }
+        catch(e) { if (e.status !== 404) throw e;
+          keep = await graph("/me/drive/items/" + CFG.automationFolderId + "/children", { method: "POST", json: { name: "PDF scannés d'origine", folder: {}, "@microsoft.graph.conflictBehavior": "fail" } }); }
+      }
+      if (keep) await graph("/me/drive/items/" + f.id, { method: "PATCH", json: { parentReference: { id: keep.id } } });
+      // le suivi pointe désormais vers le JPEG
+      const h = loadHist(), i = h.findIndex(x => x.id === f.id);
+      if (i >= 0 && res && res.id) { h[i] = { ...h[i], id: res.id, name: res.name, webUrl: res.webUrl || "" }; store.set(histKey(), h); }
+      done.push(f.name + " → " + (res && res.name || baseName(f.name) + ".jpg"));
+    } catch(e) { errors.push(f.name + " : conversion en JPEG impossible (" + (e.status ? errText(e) : (e.message || String(e))) + ")"); }
+  }
+  return { done, errors };
+}
+
 /* ---------- Envoi ---------- */
-function extOf(it){ return it.kind === "pdf" ? ".pdf" : (it.outType === "application/pdf" ? ".pdf" : ".jpg"); }
+function extOf(it){ return it.outType === "application/pdf" ? ".pdf" : ".jpg"; }
 function refreshNames(){
   for (const it of items) if (it.kind === "image" && (it.status === "ready" || it.status === "error") && it.pdfFlag !== opt.pdf) it.status = "queued";
   pump(); render();
@@ -890,16 +976,23 @@ async function runNow(mode){
     // réveille le service (offre gratuite Render : mise en veille), puis lance
     for (let i = 0; i < 6; i++) { try { const h = await fetch(API_URL + "/health", {cache: "no-store"}); if (h.ok) break; } catch(e) {} await new Promise(r => setTimeout(r, 8000)); }
     let done = "", errors = [];
+    if (!mode) {
+      try {
+        const cv = await convertScannedInInbox(msg);
+        if (cv.done.length) done = cv.done.length + " PDF scanné" + (cv.done.length > 1 ? "s" : "") + " converti" + (cv.done.length > 1 ? "s" : "") + " en JPEG : " + cv.done.join(" ; ") + ". ";
+        errors = cv.errors;
+      } catch(e) { errors = ["Vérification des PDF de « À traiter » : " + (e.status ? errText(e) : (e.message || String(e)))]; }
+    }
     if (mode) {
       try { const res = await importQontoPdfs(token, msg); done = res.text; errors = res.errors; }
       catch(e) { done = "PDF non rangés. "; errors = [e.message || String(e)]; }
       showErrors(errors);
     }
-    const report = mode ? (done + (errors.length ? "Erreurs : " + errors.join(" | ") : "Aucune erreur.")).slice(0, 1500) : "";
+    const report = (mode || done || errors.length) ? (done + (errors.length ? "Erreurs : " + errors.join(" | ") : "Aucune erreur.")).slice(0, 1500) : "";
     const r = await fetch(API_URL + "/run", { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify({ mode, report }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
-    msg.textContent = mode ? done + "Import lancé. Les factures apparaîtront ici dans quelques minutes (bouton Actualiser du suivi)." : "Traitement lancé. Le compte rendu arrivera dans Claude ; actualisez le suivi dans quelques minutes.";
+    msg.textContent = mode ? done + "Import lancé. Les factures apparaîtront ici dans quelques minutes (bouton Actualiser du suivi)." : done + "Traitement lancé. Le compte rendu arrivera dans Claude ; actualisez le suivi dans quelques minutes.";
     store.set("scanner.lastRun", Date.now());
   } catch(e) { if (mode) showErrors([].concat($("qontoErrors") && $("qontoErrors").dataset.list ? JSON.parse($("qontoErrors").dataset.list) : [], ["Lancement du traitement : " + (e.message || e)])); msg.className = "msg"; msg.textContent = "Lancement impossible : " + (e.code === "signed_out" ? "reconnectez-vous." : e instanceof TypeError ? "le service de lancement ne répond pas (" + API_URL + "). Réessayez dans une minute." : e.message); }
   finally { setTimeout(() => { btn.disabled = false; }, 30000); }
