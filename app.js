@@ -111,6 +111,16 @@ function errText(e){
   return "Erreur OneDrive : " + String(e.message || e).slice(0, 220);
 }
 
+/* ---------- Onglets : « Factures Qonto » et « Photos et fichiers » ---------- */
+function setTab(t, save){
+  t = t === "photos" ? "photos" : "qonto";
+  document.body.dataset.tab = t;
+  for (const b of document.querySelectorAll("#tabs [role=tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === t));
+  if (save) store.set("scanner.tab", t);
+}
+for (const b of document.querySelectorAll("#tabs [role=tab]")) b.onclick = () => { setTab(b.dataset.tab, true); window.scrollTo(0, 0); };
+setTab(store.get("scanner.tab", "qonto"));
+
 /* ---------- Démarrage ---------- */
 async function boot(){
   try { await handleRedirect(); } catch(e) { showBanner("Connexion impossible : " + e.message, true); }
@@ -251,6 +261,7 @@ function stamp(d){ const p = n => String(n).padStart(2, "0"); return d.getFullYe
 function baseName(n){ return n.replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|#%]/g, "-").trim() || "document"; }
 
 function addFiles(list, fromCamera){
+  if (list && list.length) setTab("photos", true);
   const files = [...(list || [])];
   let skipped = 0;
   for (const f of files) {
