@@ -870,6 +870,9 @@ async function refreshTracking(){
   trackState.loading = false; renderTracking(); renderQonto();
 }
 
+// encadrés retirés de l'onglet Qonto (affichage seulement, mémorisé sur l'appareil)
+function qHideKey(){ return "scanner.qontoHidden." + (auth.user ? auth.user.id : ""); }
+function qKey(r){ return [r.fournisseur, r.numero, r.ttc, r.dateTxt].join("|"); }
 function renderQonto(){
   const box = $("qontoBox"); if (!box) return;
   box.hidden = !auth.signedIn;
@@ -880,16 +883,33 @@ function renderQonto(){
   $("qontoInfo").textContent = qontoRows.length
     ? qontoRows.length + " facture" + (qontoRows.length > 1 ? "s" : "") + " importée" + (qontoRows.length > 1 ? "s" : "") + " · " + eur(total) + " TTC" + (aValider ? " · " + aValider + " à valider dans Qonto" : "")
     : "Aucune facture électronique importée pour l'instant.";
-  const shown = qontoRows.filter(r => !/joint|déjà justifi/i.test(r.q)).concat(qontoRows.filter(r => /joint|déjà justifi/i.test(r.q)));
+  const hidden = new Set(store.get(qHideKey(), []));
+  const visible = qontoRows.filter(r => !hidden.has(qKey(r)));
+  const nHidden = qontoRows.length - visible.length;
+  const shown = visible.filter(r => !/joint|déjà justifi/i.test(r.q)).concat(visible.filter(r => /joint|déjà justifi/i.test(r.q)));
+  if (nHidden) {
+    const back = document.createElement("button"); back.type = "button"; back.className = "btn ghost small"; back.style.alignSelf = "flex-start";
+    back.textContent = nHidden > 1 ? "Réafficher les " + nHidden + " encadrés retirés" : "Réafficher l'encadré retiré";
+    back.onclick = () => { store.set(qHideKey(), []); renderQonto(); };
+    list.append(back);
+  }
   for (const r of shown.slice(0, 15)) {
     const el = document.createElement("div"); el.className = "trow";
+    const top = document.createElement("div"); top.className = "ttop";
     const nm = document.createElement("div"); nm.className = "tname"; nm.textContent = (r.fournisseur || "?") + " · " + eur(r.ttc);
+    const del = document.createElement("button"); del.type = "button"; del.className = "tdel"; del.textContent = "✕";
+    del.title = "Retirer cet encadré"; del.setAttribute("aria-label", "Retirer l'encadré " + (r.fournisseur || "") + " " + eur(r.ttc));
+    del.onclick = () => {
+      if (!confirm("Retirer l'encadré « " + (r.fournisseur || "?") + " · " + eur(r.ttc) + " » de l'onglet Qonto ?\n\nSeul l'affichage dans l'appli est supprimé : la facture reste dans Qonto, dans OneDrive et dans le tableau des dépenses.")) return;
+      store.set(qHideKey(), [...hidden, qKey(r)]); renderQonto();
+    };
+    top.append(nm, del);
     const chips = document.createElement("div"); chips.className = "row";
     chips.append(/joint|déjà justifi/i.test(r.q) ? chip("✓ Payée", "ok", r.q) : /valider/i.test(r.q) ? chip("… À valider", "warn", "À payer ou valider dans Qonto") : chip(r.q || "?", ""));
     const when = document.createElement("div"); when.className = "hint"; when.textContent = r.dateTxt + (r.numero ? " · n° " + r.numero : "");
-    el.append(nm, chips); if (r.motif) el.append(motifLine(r.motif)); el.append(when); list.append(el);
+    el.append(top, chips); if (r.motif) el.append(motifLine(r.motif)); el.append(when); list.append(el);
   }
-  if (qontoRows.length > 15) { const more = document.createElement("div"); more.className = "hint"; more.textContent = "… et " + (qontoRows.length - 15) + " autres dans le tableau des dépenses."; list.append(more); }
+  if (shown.length > 15) { const more = document.createElement("div"); more.className = "hint"; more.textContent = "… et " + (shown.length - 15) + " autres dans le tableau des dépenses."; list.append(more); }
 }
 
 function motifLine(text){ const d = document.createElement("div"); d.className = "motif"; d.textContent = "Motif : " + text; return d; }
@@ -1026,8 +1046,11 @@ function showErrors(list){
   const box = $("qontoErrors"); if (!box) return;
   box.textContent = ""; box.dataset.list = JSON.stringify(list || []); box.hidden = !(list && list.length);
   if (!list || !list.length) return;
-  const t = document.createElement("div"); t.className = "label"; t.textContent = "Erreurs de l'import (" + new Date().toLocaleString("fr-FR", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"}) + ")";
-  box.append(t);
+  const head = document.createElement("div"); head.className = "ttop";
+  const t = document.createElement("div"); t.className = "label tname"; t.textContent = "Erreurs de l'import (" + new Date().toLocaleString("fr-FR", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"}) + ")";
+  const x = document.createElement("button"); x.type = "button"; x.className = "tdel"; x.textContent = "✕"; x.title = "Effacer ces erreurs"; x.setAttribute("aria-label", "Effacer les erreurs de l'import");
+  x.onclick = () => { store.del("scanner.qontoErrors"); showErrors([]); };
+  head.append(t, x); box.append(head);
   for (const m of list) { const d = document.createElement("div"); d.className = "motif"; d.textContent = m; box.append(d); }
   store.set("scanner.qontoErrors", { at: Date.now(), list });
 }
