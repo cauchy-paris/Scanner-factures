@@ -818,7 +818,7 @@ function askRemove(rows){
   const n = rows.length;
   const what = n === 1 ? "« " + rows[0].name + " »" : n + " encadrés";
   if (!confirm("Retirer " + what + " du suivi ?\n\nSeul l'affichage dans l'appli est supprimé : aucun fichier n'est effacé dans OneDrive, et le tableau des dépenses ne change pas.")) return;
-  removeHist(rows.map(r => r.id));
+  endSel("track"); removeHist(rows.map(r => r.id));
 }
 let trackState = { rows: [], loading: false, at: 0, err: "" };
 let qontoRows = null; // lignes « Qonto e-facture » du tableau, null tant que non lues
@@ -870,6 +870,34 @@ async function refreshTracking(){
   trackState.loading = false; renderTracking(); renderQonto();
 }
 
+// sélection multiple et « Tout retirer » (affichage seulement), pour le suivi et l'onglet Qonto
+const selState = { qonto: { on: false, keys: new Set() }, track: { on: false, keys: new Set() } };
+function bulkBar(kind, allKeys, remove, rerender){
+  const st = selState[kind];
+  for (const k of [...st.keys]) if (!allKeys.includes(k)) st.keys.delete(k);
+  const bar = document.createElement("div"); bar.className = "row bulk";
+  if (!allKeys.length) { st.on = false; return bar; }
+  const b = (label, fn, cls, dis) => { const x = mkBtn(label, fn, dis); x.className = "btn small " + (cls || "ghost"); return x; };
+  if (!st.on) {
+    bar.append(b("Sélectionner", () => { st.on = true; st.keys.clear(); rerender(); }),
+               b("Tout retirer (" + allKeys.length + ")", () => remove(allKeys)));
+  } else {
+    const all = st.keys.size === allKeys.length;
+    bar.append(b(all ? "Tout décocher" : "Tout cocher", () => { if (all) st.keys.clear(); else allKeys.forEach(k => st.keys.add(k)); rerender(); }),
+               b("Retirer la sélection (" + st.keys.size + ")", () => remove([...st.keys]), "danger", !st.keys.size),
+               b("Annuler", () => { st.on = false; st.keys.clear(); rerender(); }));
+  }
+  return bar;
+}
+function selBox(kind, key, label, rerender){
+  const st = selState[kind];
+  const c = document.createElement("input"); c.type = "checkbox"; c.className = "tsel"; c.checked = st.keys.has(key);
+  c.setAttribute("aria-label", "Sélectionner " + label);
+  c.onchange = () => { if (c.checked) st.keys.add(key); else st.keys.delete(key); rerender(); };
+  return c;
+}
+function endSel(kind){ selState[kind].on = false; selState[kind].keys.clear(); }
+
 // encadrés retirés de l'onglet Qonto (affichage seulement, mémorisé sur l'appareil)
 function qHideKey(){ return "scanner.qontoHidden." + (auth.user ? auth.user.id : ""); }
 function qKey(r){ return [r.fournisseur, r.numero, r.ttc, r.dateTxt].join("|"); }
@@ -893,8 +921,15 @@ function renderQonto(){
     back.onclick = () => { store.set(qHideKey(), []); renderQonto(); };
     list.append(back);
   }
-  for (const r of shown.slice(0, 15)) {
-    const el = document.createElement("div"); el.className = "trow";
+  const qRemove = keys => {
+    const n = keys.length; if (!n) return;
+    if (!confirm("Retirer " + (n === 1 ? "cet encadré" : "ces " + n + " encadrés") + " de l'onglet Qonto ?\n\nSeul l'affichage dans l'appli est supprimé : les factures restent dans Qonto, dans OneDrive et dans le tableau des dépenses. Le bouton « Réafficher » les remet.")) return;
+    store.set(qHideKey(), [...new Set([...hidden, ...keys])]); endSel("qonto"); renderQonto();
+  };
+  const qSel = selState.qonto;
+  if (shown.length) list.append(bulkBar("qonto", shown.map(qKey), qRemove, renderQonto));
+  for (const r of shown.slice(0, qSel.on ? shown.length : 15)) {
+    const el = document.createElement("div"); el.className = "trow" + (qSel.on && qSel.keys.has(qKey(r)) ? " picked" : "");
     const top = document.createElement("div"); top.className = "ttop";
     const nm = document.createElement("div"); nm.className = "tname"; nm.textContent = (r.fournisseur || "?") + " · " + eur(r.ttc);
     const del = document.createElement("button"); del.type = "button"; del.className = "tdel"; del.textContent = "✕";
@@ -903,13 +938,13 @@ function renderQonto(){
       if (!confirm("Retirer l'encadré « " + (r.fournisseur || "?") + " · " + eur(r.ttc) + " » de l'onglet Qonto ?\n\nSeul l'affichage dans l'appli est supprimé : la facture reste dans Qonto, dans OneDrive et dans le tableau des dépenses.")) return;
       store.set(qHideKey(), [...hidden, qKey(r)]); renderQonto();
     };
-    top.append(nm, del);
+    top.append(nm, qSel.on ? selBox("qonto", qKey(r), (r.fournisseur || "") + " " + eur(r.ttc), renderQonto) : del);
     const chips = document.createElement("div"); chips.className = "row";
     chips.append(/joint|déjà justifi/i.test(r.q) ? chip("✓ Payée", "ok", r.q) : /valider/i.test(r.q) ? chip("… À valider", "warn", "À payer ou valider dans Qonto") : chip(r.q || "?", ""));
     const when = document.createElement("div"); when.className = "hint"; when.textContent = r.dateTxt + (r.numero ? " · n° " + r.numero : "");
     el.append(top, chips); if (r.motif) el.append(motifLine(r.motif)); el.append(when); list.append(el);
   }
-  if (shown.length > 15) { const more = document.createElement("div"); more.className = "hint"; more.textContent = "… et " + (shown.length - 15) + " autres dans le tableau des dépenses."; list.append(more); }
+  if (!qSel.on && shown.length > 15) { const more = document.createElement("div"); more.className = "hint"; more.textContent = "… et " + (shown.length - 15) + " autres dans le tableau des dépenses."; list.append(more); }
 }
 
 function motifLine(text){ const d = document.createElement("div"); d.className = "motif"; d.textContent = "Motif : " + text; return d; }
@@ -925,14 +960,16 @@ function renderTracking(){
   const lost = rows.filter(r => r.where === "absent");
   const bulk = $("trackClearLost"); if (bulk) { bulk.hidden = lost.length < 2; bulk.textContent = "Retirer les " + lost.length + " introuvables"; bulk.onclick = () => askRemove(lost); }
   if (!rows.length) { list.innerHTML = '<div class="fstate">Les documents envoyés apparaîtront ici avec leur état de traitement.</div>'; return; }
+  const tSel = selState.track, byId = new Map(rows.map(r => [r.id, r]));
+  list.append(bulkBar("track", rows.map(r => r.id), ids => askRemove(ids.map(id => byId.get(id))), renderTracking));
   for (const r of rows) {
-    const el = document.createElement("div"); el.className = "trow";
+    const el = document.createElement("div"); el.className = "trow" + (tSel.on && tSel.keys.has(r.id) ? " picked" : "");
     const top = document.createElement("div"); top.className = "ttop";
     const nm = document.createElement(r.webUrl ? "a" : "div"); nm.className = "tname"; nm.textContent = r.name;
     if (r.webUrl) { nm.href = r.webUrl; nm.target = "_blank"; nm.rel = "noopener"; }
     const del = document.createElement("button"); del.type = "button"; del.className = "tdel"; del.textContent = "✕";
     del.title = del.ariaLabel = "Retirer cet encadré du suivi"; del.onclick = () => askRemove([r]);
-    top.append(nm, del);
+    top.append(nm, tSel.on ? selBox("track", r.id, r.name, renderTracking) : del);
     const chips = document.createElement("div"); chips.className = "row";
     if (r.pending) chips.append(chip("Envoyé", "ok"));
     else if (r.where === "absent") chips.append(chip("Introuvable", "warn", "Déplacé hors de portée ou supprimé"));
