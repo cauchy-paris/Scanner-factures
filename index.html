@@ -159,12 +159,18 @@ header.top{display:flex;justify-content:space-between;align-items:flex-start;gap
 a.tname{color:var(--accent)}
 .wrap>.queue{order:5}
 #qontoBox{order:0}
+.tabs{display:flex;gap:4px;padding:4px;background:var(--sunken);border-radius:12px}
+.tabs button{flex:1;border:0;background:transparent;color:var(--muted);font:inherit;font-weight:600;padding:10px 8px;border-radius:9px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px}
+.tabs button svg{width:18px;height:18px;flex:none}
+.tabs button[aria-selected="true"]{background:var(--surface);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+body[data-tab="qonto"] .tab-photos{display:none!important}
+body[data-tab="photos"] .tab-qonto{display:none!important}
 .motif{font-size:12.5px;color:var(--fg);background:var(--sunken);border-left:3px solid #d97706;border-radius:6px;padding:6px 8px;overflow-wrap:anywhere}
 .errbox{display:flex;flex-direction:column;gap:6px}
 .errbox .motif{border-left-color:#dc2626}
 </style>
 </head>
-<body>
+<body data-tab="qonto">
 <div class="wrap">
   <header class="top">
     <div>
@@ -184,7 +190,18 @@ a.tname{color:var(--accent)}
 
   <div id="banner" class="banner" hidden></div>
 
-  <section class="dest" aria-label="Dossier de destination">
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Sections">
+    <button type="button" role="tab" id="tabQonto" data-tab="qonto" aria-controls="qontoBox" aria-selected="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 19h14"/></svg>
+      Factures Qonto
+    </button>
+    <button type="button" role="tab" id="tabPhotos" data-tab="photos" aria-selected="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.6"/></svg>
+      Photos et fichiers
+    </button>
+  </nav>
+
+  <section class="dest tab-photos" aria-label="Dossier de destination">
     <div class="info">
       <div class="label">Envoyer dans</div>
       <div class="crumbs" id="destPath">…</div>
@@ -195,7 +212,7 @@ a.tname{color:var(--accent)}
       Changer
     </button>
   </section>
-  <section class="track" id="qontoBox" hidden aria-labelledby="qontoTitle">
+  <section class="track tab-qonto" id="qontoBox" hidden aria-labelledby="qontoTitle">
     <div class="qhead">
       <div class="label" id="qontoTitle">Factures reçues sur Qonto</div>
     </div>
@@ -211,7 +228,7 @@ a.tname{color:var(--accent)}
     <div class="tlist" id="qontoList"></div>
   </section>
 
-  <div class="actions">
+  <div class="actions tab-photos">
     <label class="btn primary big" for="camInput">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.6"/></svg>
       Prendre une photo
@@ -225,14 +242,14 @@ a.tname{color:var(--accent)}
       <input id="fileInput" type="file" accept="image/*,application/pdf,.pdf" multiple>
     </label>
   </div>
-  <div class="drop" id="drop">Ou glissez ici vos photos et PDF, un par un ou par lots.</div>
+  <div class="drop tab-photos" id="drop">Ou glissez ici vos photos et PDF, un par un ou par lots.</div>
 
-  <div class="opts">
+  <div class="opts tab-photos">
     <label><input type="checkbox" id="optPdf"> Convertir les photos en PDF (non lisible par le traitement automatique)</label>
     <label><input type="checkbox" id="optBw"> Photos en noir et blanc</label>
   </div>
 
-  <section class="track" id="track" hidden aria-labelledby="trackTitle">
+  <section class="track tab-photos" id="track" hidden aria-labelledby="trackTitle">
     <div class="qhead">
       <div class="label" id="trackTitle">Suivi des envois</div>
       <span class="row"><button class="btn ghost small" id="trackClearLost" type="button" hidden>Retirer les introuvables</button>
@@ -250,14 +267,14 @@ a.tname{color:var(--accent)}
   </section>
 
 
-  <div class="qhead">
+  <div class="qhead tab-photos">
     <div class="label" id="qcount">File d'attente</div>
     <button class="btn ghost small" id="clearDone" type="button" hidden>Retirer les envoyés</button>
   </div>
-  <div class="queue" id="queue"></div>
+  <div class="queue tab-photos" id="queue"></div>
 </div>
 
-<div class="sendbar">
+<div class="sendbar tab-photos">
   <div class="in">
     <div class="txt" id="sendTxt">Aucun document à envoyer.</div>
     <button class="btn primary" id="sendBtn" type="button" disabled>Envoyer</button>
