@@ -111,15 +111,15 @@ function errText(e){
   return "Erreur OneDrive : " + String(e.message || e).slice(0, 220);
 }
 
-/* ---------- Onglets : « Factures Qonto » et « Photos et fichiers » ---------- */
+/* ---------- Onglets : « Photos et fichiers » (par défaut) et « Factures Qonto » ---------- */
 function setTab(t, save){
-  t = t === "photos" ? "photos" : "qonto";
+  t = t === "qonto" ? "qonto" : "photos";
   document.body.dataset.tab = t;
   for (const b of document.querySelectorAll("#tabs [role=tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === t));
-  if (save) store.set("scanner.tab", t);
+  if (save) store.set("scanner.tab.v2", t);
 }
 for (const b of document.querySelectorAll("#tabs [role=tab]")) b.onclick = () => { setTab(b.dataset.tab, true); window.scrollTo(0, 0); };
-setTab(store.get("scanner.tab", "qonto"));
+setTab(store.get("scanner.tab.v2", "photos"));
 
 /* ---------- Démarrage ---------- */
 async function boot(){
