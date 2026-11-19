@@ -25,10 +25,27 @@ function supplierName(raw){
 const money = v => +((v && v.value) || 0);
 const fr = n => n.toFixed(2).replace(".", ",");
 
-async function qonto(path){
-  const r = await fetch(QONTO_API + path, { headers: { Authorization: QONTO_LOGIN + ":" + QONTO_SECRET_KEY, Accept: "application/json" } });
-  if (!r.ok) { const e = new Error("Qonto a répondu " + r.status + "."); e.status = r.status; throw e; }
-  return r.json();
+async function qonto(path, opts){
+  const r = await fetch(QONTO_API + path, Object.assign({}, opts, { headers: Object.assign({ Authorization: QONTO_LOGIN + ":" + QONTO_SECRET_KEY, Accept: "application/json" }, (opts && opts.headers) || {}) }));
+  if (!r.ok) {
+    const j = await r.json().catch(() => null);
+    const detail = j && ((j.errors && j.errors[0] && (j.errors[0].detail || j.errors[0].code)) || j.message);
+    const e = new Error("Qonto a répondu " + r.status + "." + (detail ? " " + detail : "")); e.status = r.status; throw e;
+  }
+  return r.json().catch(() => ({}));
+}
+
+// Joint un justificatif (corps brut envoyé par l'appli) à une opération Qonto, sauf si elle en a déjà un
+const ATTACH_TYPES = ["application/pdf", "image/jpeg", "image/png"];
+async function attachToTransaction(id, buf, type, name, force){
+  const t = (await qonto("/transactions/" + id)).transaction || {};
+  const existing = t.attachment_ids || [];
+  if (existing.length && !force) return { status: "deja", count: existing.length };
+  const fd = new FormData();
+  fd.append("file", new Blob([buf], { type }), name);
+  await qonto("/transactions/" + id + "/attachments", { method: "POST", body: fd,
+    headers: { "X-Qonto-Idempotency-Key": require("crypto").createHash("sha256").update(id + ":" + name + ":" + buf.length).digest("hex").slice(0, 32).replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, "$1-$2-$3-$4-$5") } });
+  return { status: "joint", label: t.label || "", amount: t.amount, date: String(t.settled_at || t.emitted_at || "").slice(0, 10) };
 }
 
 // Toutes les factures électroniques fournisseurs (source e_invoicing), au format attendu par l'appli
@@ -66,7 +83,7 @@ function send(res, origin, status, body){
   // CORS ouvert : la sécurité repose sur le jeton Microsoft vérifié ci-dessous, pas sur l'origine
   if (origin) {
     h["Access-Control-Allow-Origin"] = origin; h["Vary"] = "Origin";
-    h["Access-Control-Allow-Headers"] = "Authorization, Content-Type"; h["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"; h["Access-Control-Max-Age"] = "600";
+    h["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-File-Name"; h["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"; h["Access-Control-Max-Age"] = "600";
   }
   res.writeHead(status, h); res.end(body === undefined ? "" : JSON.stringify(body));
 }
@@ -111,6 +128,22 @@ http.createServer(async (req, res) => {
       }
       return send(res, origin, 404, { error: "Introuvable" });
     } catch (e) { return send(res, origin, 502, { error: e.status === 401 ? "Clé API Qonto refusée : vérifiez QONTO_LOGIN et QONTO_SECRET_KEY." : (e.message || "Qonto injoignable.") }); }
+  }
+  if (req.method === "POST" && url.pathname === "/qonto/attach") {
+    if (!ALLOWED_EMAILS.length) return send(res, origin, 500, { error: "Service non configuré (ALLOWED_EMAILS)." });
+    if (!QONTO_LOGIN || !QONTO_SECRET_KEY) return send(res, origin, 501, { error: "Clé API Qonto absente : ajoutez QONTO_LOGIN et QONTO_SECRET_KEY dans Render." });
+    const bad = await checkUser(req); if (bad) return send(res, origin, bad[0], { error: bad[1] });
+    const id = url.searchParams.get("transaction") || "";
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return send(res, origin, 400, { error: "Opération Qonto invalide." });
+    const type = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+    if (!ATTACH_TYPES.includes(type)) return send(res, origin, 415, { error: "Format refusé par Qonto (PDF, JPEG ou PNG seulement)." });
+    let name = "justificatif" + (type === "application/pdf" ? ".pdf" : type === "image/png" ? ".png" : ".jpg");
+    try { name = decodeURIComponent(req.headers["x-file-name"] || "") || name; } catch (e) {}
+    const chunks = []; let size = 0;
+    for await (const c of req) { size += c.length; if (size > 15 * 1024 * 1024) return send(res, origin, 413, { error: "Fichier trop lourd pour Qonto (15 Mo maximum)." }); chunks.push(c); }
+    if (!size) return send(res, origin, 400, { error: "Fichier vide." });
+    try { return send(res, origin, 200, await attachToTransaction(id, Buffer.concat(chunks), type, name, url.searchParams.get("force") === "1")); }
+    catch (e) { return send(res, origin, e.status === 404 ? 404 : 502, { error: e.status === 401 ? "Clé API Qonto refusée : vérifiez QONTO_LOGIN et QONTO_SECRET_KEY." : e.status === 404 ? "Opération introuvable dans Qonto." : (e.message || "Qonto injoignable.") }); }
   }
   if (req.method !== "POST" || url.pathname !== "/run") return send(res, origin, 404, { error: "Introuvable" });
   if (!ROUTINE_ID || !ROUTINE_TOKEN || !ALLOWED_EMAILS.length) return send(res, origin, 500, { error: "Service non configuré (ROUTINE_ID, ROUTINE_TOKEN, ALLOWED_EMAILS)." });
