@@ -808,7 +808,7 @@ const API_URL = (CFG.apiUrl || "").replace(/\/$/, "");
 const EXPENSES_PATH = CFG.expensesPath || "";
 function histKey(){ return "scanner.hist." + (auth.user ? auth.user.id : ""); }
 function loadHist(){ return store.get(histKey(), []); }
-function addHist(e){ const h = loadHist().filter(x => x.id !== e.id); h.unshift(e); store.set(histKey(), h.slice(0, 40)); }
+function addHist(e){ const h = loadHist().filter(x => x.id !== e.id); h.unshift(e); store.set(histKey(), h.slice(0, 100)); }
 function removeHist(ids){
   const set = new Set(ids);
   store.set(histKey(), loadHist().filter(x => !set.has(x.id)));
@@ -863,7 +863,7 @@ async function refreshTracking(){
       const where = /\/Fournisseurs\//.test(path) ? "classe" : /À vérifier/.test(path) ? "verifier" : it.missing ? "absent" : "attente";
       const q = qonto[name] || "";
       const matched = /joint|déjà justifi/i.test(q) ? "ok" : /valider/i.test(q) ? "valider" : q ? "autre" : "";
-      const motif = motifs[name] || (where === "verifier" ? "Rangé dans « À vérifier » : voir le compte rendu dans Claude." : where === "absent" ? "Fichier déplacé hors de portée ou supprimé." : "");
+      const motif = motifs[name] || (where === "verifier" ? "Rangé dans « À vérifier » : une vérification est nécessaire (détail dans le compte rendu Claude)." : where === "absent" ? "Fichier déplacé hors de portée ou supprimé." : "");
       return { ...h, name, webUrl: it.webUrl || h.webUrl, path, renamed, where, q, matched, motif };
     });
     trackState.at = Date.now();
@@ -960,7 +960,7 @@ function renderTracking(){
   const rows = trackState.rows.length ? trackState.rows : loadHist().map(h => ({...h, pending: true}));
   const lost = rows.filter(r => r.where === "absent");
   const bulk = $("trackClearLost"); if (bulk) { bulk.hidden = lost.length < 2; bulk.textContent = "Retirer les " + lost.length + " introuvables"; bulk.onclick = () => askRemove(lost); }
-  if (!rows.length) { list.innerHTML = '<div class="fstate">Les documents envoyés apparaîtront ici avec leur état de traitement.</div>'; return; }
+  if (!rows.length) { list.innerHTML = '<div class="fstate">Les documents envoyés depuis l\'appli et ceux déposés dans « À traiter » apparaîtront ici après un traitement, avec leur état et le motif en cas d\'erreur.</div>'; return; }
   const tSel = selState.track, byId = new Map(rows.map(r => [r.id, r]));
   list.append(bulkBar("track", rows.map(r => r.id), ids => askRemove(ids.map(id => byId.get(id))), renderTracking));
   for (const r of rows) {
@@ -972,14 +972,14 @@ function renderTracking(){
     del.title = del.ariaLabel = "Retirer cet encadré du suivi"; del.onclick = () => askRemove([r]);
     top.append(nm, tSel.on ? selBox("track", r.id, r.name, renderTracking) : del);
     const chips = document.createElement("div"); chips.className = "row";
-    if (r.pending) chips.append(chip("Envoyé", "ok"));
+    if (r.pending) chips.append(r.src === "onedrive" ? chip("En traitement", "") : chip("Envoyé", "ok"));
     else if (r.where === "absent") chips.append(chip("Introuvable", "warn", "Déplacé hors de portée ou supprimé"));
     else {
       chips.append(r.renamed ? chip("✓ Renommé", "ok") : chip("○ À renommer", ""));
       chips.append(r.where === "classe" ? chip("✓ Classé", "ok", r.path) : r.where === "verifier" ? chip("! À vérifier", "warn", r.path) : chip("○ À classer", ""));
       chips.append(r.matched === "ok" ? chip("✓ Rapproché", "ok", r.q) : r.matched === "valider" ? chip("… Qonto à valider", "warn", "Validez le rattachement dans le fil Claude") : r.q ? chip(r.q, "") : chip("○ Rapprochement", ""));
     }
-    const when = document.createElement("div"); when.className = "hint"; when.textContent = "Envoyé le " + new Date(r.at).toLocaleString("fr-FR", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
+    const when = document.createElement("div"); when.className = "hint"; when.textContent = (r.src === "onedrive" ? "Déposé dans OneDrive, traitement lancé le " : "Envoyé le ") + new Date(r.at).toLocaleString("fr-FR", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
     el.append(top, chips);
     if (r.motif) el.append(motifLine(r.motif));
     el.append(when); list.append(el);
@@ -1110,6 +1110,11 @@ async function runNow(mode){
         errors = cv.errors;
       } catch(e) { errors = ["Vérification des PDF de « À traiter » : " + (e.status ? errText(e) : (e.message || String(e)))]; }
     }
+    if (!mode) {
+      // chaque fichier présent dans « À traiter » (y compris glissé à la main dans OneDrive) reçoit son encadré de suivi
+      try { const n = await trackInbox(); if (n) done += n + " fichier" + (n > 1 ? "s" : "") + " de « À traiter » ajouté" + (n > 1 ? "s" : "") + " au suivi. "; }
+      catch(e) { errors = errors.concat(["Lecture de « À traiter » : " + (e.status ? errText(e) : (e.message || String(e)))]); }
+    }
     try { const qr = await processQontoQueue(token, msg); if (qr) { done += qr.text; errors = errors.concat(qr.errors); } }
     catch(e) { errors = errors.concat(["Justificatifs à joindre sur Qonto : " + (e.status ? errText(e) : (e.message || String(e)))]); }
     if (mode) {
@@ -1122,13 +1127,22 @@ async function runNow(mode){
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
     msg.textContent = mode ? done + "Import lancé. Les factures apparaîtront ici dans quelques minutes (bouton Actualiser du suivi)." : done + "Traitement lancé. Le compte rendu arrivera dans Claude ; actualisez le suivi dans quelques minutes.";
-    store.set("scanner.lastRun", Date.now()); if (!mode) { refreshInbox(); setTimeout(refreshInbox, 180000); }
+    store.set("scanner.lastRun", Date.now()); if (!mode) { refreshInbox(); refreshTracking(); for (const t of [180000, 360000, 600000]) setTimeout(() => { refreshInbox(); refreshTracking(); }, t); }
   } catch(e) { if (mode) showErrors([].concat($("qontoErrors") && $("qontoErrors").dataset.list ? JSON.parse($("qontoErrors").dataset.list) : [], ["Lancement du traitement : " + (e.message || e)])); msg.className = "msg"; msg.textContent = "Lancement impossible : " + (e.code === "signed_out" ? "reconnectez-vous." : e instanceof TypeError ? "le service de lancement ne répond pas (" + API_URL + "). Réessayez dans une minute." : e.message); }
   finally { setTimeout(() => { btn.disabled = false; }, 30000); }
 }
 $("runNow").onclick = () => runNow();
 
 /* ---------- Dossier « À traiter » : nombre de fichiers en attente ---------- */
+async function trackInbox(){
+  const path = (CFG.defaultPath || []).map(encodeURIComponent).join("/");
+  if (!path) return 0;
+  const list = await graph("/me/drive/root:/" + path + ":/children?$select=id,name,file,webUrl&$top=200");
+  const known = new Set(loadHist().map(h => h.id)); let n = 0;
+  for (const f of (list.value || []).filter(f => f.file).reverse())
+    if (!known.has(f.id)) { addHist({ id: f.id, name: f.name, webUrl: f.webUrl || "", at: Date.now(), src: "onedrive" }); n++; }
+  return n;
+}
 let inboxBusy = false;
 async function refreshInbox(){
   const box = $("inboxBox"), out = $("inboxCount"); if (!box) return;
