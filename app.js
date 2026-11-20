@@ -111,9 +111,9 @@ function errText(e){
   return "Erreur OneDrive : " + String(e.message || e).slice(0, 220);
 }
 
-/* ---------- Onglets : « Photos et fichiers » (par défaut) et « Factures Qonto » ---------- */
+/* ---------- Onglets : Photos et fichiers (par défaut), Factures Qonto, OneDrive, Gmail ---------- */
 function setTab(t, save){
-  t = t === "qonto" ? "qonto" : "photos";
+  t = ["qonto", "onedrive", "gmail"].includes(t) ? t : "photos";
   document.body.dataset.tab = t;
   for (const b of document.querySelectorAll("#tabs [role=tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === t));
   if (save) store.set("scanner.tab.v2", t);
@@ -809,8 +809,11 @@ const EXPENSES_PATH = CFG.expensesPath || "";
 function histKey(){ return "scanner.hist." + (auth.user ? auth.user.id : ""); }
 function loadHist(){ return store.get(histKey(), []); }
 function addHist(e){ const h = loadHist().filter(x => x.id !== e.id); h.unshift(e); store.set(histKey(), h.slice(0, 100)); }
+function mHideKey(){ return "scanner.mailHidden." + (auth.user ? auth.user.id : ""); }
 function removeHist(ids){
   const set = new Set(ids);
+  const mails = ids.filter(id => String(id).startsWith("mail:"));
+  if (mails.length) store.set(mHideKey(), [...new Set(store.get(mHideKey(), []).concat(mails))].slice(-500));
   store.set(histKey(), loadHist().filter(x => !set.has(x.id)));
   trackState.rows = trackState.rows.filter(x => !set.has(x.id));
   renderTracking();
@@ -819,7 +822,7 @@ function askRemove(rows){
   const n = rows.length;
   const what = n === 1 ? "« " + rows[0].name + " »" : n + " encadrés";
   if (!confirm("Retirer " + what + " du suivi ?\n\nSeul l'affichage dans l'appli est supprimé : aucun fichier n'est effacé dans OneDrive, et le tableau des dépenses ne change pas.")) return;
-  endSel("track"); removeHist(rows.map(r => r.id));
+  endSel("track"); endSel("od"); endSel("mail"); removeHist(rows.map(r => r.id));
 }
 let trackState = { rows: [], loading: false, at: 0, err: "" };
 let qontoRows = null; // lignes « Qonto e-facture » du tableau, null tant que non lues
@@ -838,7 +841,7 @@ async function refreshTracking(){
         url: "/me/drive/items/" + h.id + "?$select=id,name,webUrl,parentReference" })) } });
       for (const resp of r.responses) { const h = chunk[+resp.id]; info[h.id] = resp.status === 200 ? resp.body : { missing: true }; }
     }
-    let qonto = {}, motifs = {};
+    let qonto = {}, motifs = {}, mailRows = [];
     if (EXPENSES_PATH) {
       try {
         const p = EXPENSES_PATH.split("/").map(encodeURIComponent).join("/");
@@ -849,6 +852,16 @@ async function refreshTracking(){
         for (const row of vals.slice(1)) if (row[iName]) { qonto[String(row[iName]).trim()] = String(row[iQ] || "").trim(); if (iMotif >= 0 && row[iMotif]) motifs[String(row[iName]).trim()] = String(row[iMotif]).trim(); }
         const col = re => head.findIndex(x => re.test(String(x)));
         const iSrc = col(/^source/i), iD = col(/^date$/i), iF = col(/fournisseur/i), iN = col(/n° ?facture|numéro/i), iT = col(/TTC/i);
+        const iTr = col(/date de traitement/i), since = Date.now() / 86400000 + 25569 - 30;
+        if (iSrc >= 0 && iTr >= 0) {
+          const hiddenMail = new Set(store.get(mHideKey(), []));
+          mailRows = vals.slice(1).filter(r => /gmail|mail/i.test(String(r[iSrc])) && +r[iTr] >= since && r[iName]).map(r => {
+            const name = String(r[iName]).trim(), q = String(r[iQ] || "").trim();
+            return { id: "mail:" + name, name, src: "mail", at: Math.round((+r[iTr] - 25569) * 86400000), where: "mail",
+              fournisseur: r[iF], ttc: r[iT], q, matched: /joint|déjà justifi/i.test(q) ? "ok" : /valider/i.test(q) ? "valider" : q ? "autre" : "",
+              motif: iMotif >= 0 ? String(r[iMotif] || "").trim() : "" };
+          }).filter(r => !hiddenMail.has(r.id)).sort((a, b) => b.at - a.at);
+        }
         if (iSrc >= 0) qontoRows = vals.slice(1).filter(r => /qonto e-facture/i.test(String(r[iSrc]))).map(r => ({
           date: r[iD], dateTxt: xlDate(r[iD]), fournisseur: r[iF], numero: r[iN], ttc: r[iT], q: String(r[iQ] || "").trim(),
           motif: iMotif >= 0 ? String(r[iMotif] || "").trim() : "" }))
@@ -866,13 +879,14 @@ async function refreshTracking(){
       const motif = motifs[name] || (where === "verifier" ? "Rangé dans « À vérifier » : une vérification est nécessaire (détail dans le compte rendu Claude)." : where === "absent" ? "Fichier déplacé hors de portée ou supprimé." : "");
       return { ...h, name, webUrl: it.webUrl || h.webUrl, path, renamed, where, q, matched, motif };
     });
+    trackState.rows = trackState.rows.concat(mailRows);
     trackState.at = Date.now();
   } catch(e) { trackState.err = errText(e); }
   trackState.loading = false; renderTracking(); renderQonto();
 }
 
 // sélection multiple et « Tout retirer » (affichage seulement), pour le suivi et l'onglet Qonto
-const selState = { qonto: { on: false, keys: new Set() }, track: { on: false, keys: new Set() } };
+const selState = { qonto: { on: false, keys: new Set() }, track: { on: false, keys: new Set() }, od: { on: false, keys: new Set() }, mail: { on: false, keys: new Set() } };
 function bulkBar(kind, allKeys, remove, rerender){
   const st = selState[kind];
   for (const k of [...st.keys]) if (!allKeys.includes(k)) st.keys.delete(k);
@@ -952,17 +966,24 @@ function motifLine(text){ const d = document.createElement("div"); d.className =
 function chip(text, cls, title){ const s = document.createElement("span"); s.className = "pill " + (cls || ""); s.textContent = text; if (title) s.title = title; return s; }
 function renderTracking(){
   const box = $("track"); if (!box) return;
-  box.hidden = !auth.signedIn;
-  const list = $("trackList"); list.textContent = "";
-  $("trackRefresh").disabled = trackState.loading;
-  $("trackInfo").textContent = trackState.loading ? "Mise à jour…" : trackState.err ? trackState.err
+  for (const id of ["track", "odBox", "mailBox"]) $(id).hidden = !auth.signedIn;
+  $("trackRefresh").disabled = $("mailRefresh").disabled = trackState.loading;
+  const info = trackState.loading ? "Mise à jour…" : trackState.err ? trackState.err
     : trackState.at ? "Mis à jour à " + new Date(trackState.at).toLocaleTimeString("fr-FR", {hour: "2-digit", minute: "2-digit"}) : "";
-  const rows = trackState.rows.length ? trackState.rows : loadHist().map(h => ({...h, pending: true}));
+  for (const id of ["trackInfo", "odInfo", "mailInfo"]) $(id).textContent = info;
+  const all = trackState.rows.length ? trackState.rows : loadHist().map(h => ({...h, pending: true}));
+  const rows = all.filter(r => r.src !== "onedrive" && r.src !== "mail");
   const lost = rows.filter(r => r.where === "absent");
   const bulk = $("trackClearLost"); if (bulk) { bulk.hidden = lost.length < 2; bulk.textContent = "Retirer les " + lost.length + " introuvables"; bulk.onclick = () => askRemove(lost); }
-  if (!rows.length) { list.innerHTML = '<div class="fstate">Les documents envoyés depuis l\'appli et ceux déposés dans « À traiter » apparaîtront ici après un traitement, avec leur état et le motif en cas d\'erreur.</div>'; return; }
-  const tSel = selState.track, byId = new Map(rows.map(r => [r.id, r]));
-  list.append(bulkBar("track", rows.map(r => r.id), ids => askRemove(ids.map(id => byId.get(id))), renderTracking));
+  renderTrackList("track", $("trackList"), rows, "Les photos et fichiers envoyés depuis l\'appli apparaîtront ici avec leur état de traitement.");
+  renderTrackList("od", $("odList"), all.filter(r => r.src === "onedrive"), "Les factures déposées dans « À traiter » apparaîtront ici après un clic sur « Lancer le traitement OneDrive », avec leur état et le motif en cas de problème.");
+  renderTrackList("mail", $("mailList"), all.filter(r => r.src === "mail"), trackState.at ? "Aucune facture traitée par mail ces 30 derniers jours." : "Les factures reçues par mail apparaîtront ici après leur traitement, avec leur état et le motif en cas de problème.");
+}
+function renderTrackList(kind, list, rows, empty){
+  list.textContent = "";
+  if (!rows.length) { const d = document.createElement("div"); d.className = "fstate"; d.textContent = empty; list.append(d); return; }
+  const tSel = selState[kind], byId = new Map(rows.map(r => [r.id, r]));
+  list.append(bulkBar(kind, rows.map(r => r.id), ids => askRemove(ids.map(id => byId.get(id))), renderTracking));
   for (const r of rows) {
     const el = document.createElement("div"); el.className = "trow" + (tSel.on && tSel.keys.has(r.id) ? " picked" : "");
     const top = document.createElement("div"); top.className = "ttop";
@@ -970,22 +991,27 @@ function renderTracking(){
     if (r.webUrl) { nm.href = r.webUrl; nm.target = "_blank"; nm.rel = "noopener"; }
     const del = document.createElement("button"); del.type = "button"; del.className = "tdel"; del.textContent = "✕";
     del.title = del.ariaLabel = "Retirer cet encadré du suivi"; del.onclick = () => askRemove([r]);
-    top.append(nm, tSel.on ? selBox("track", r.id, r.name, renderTracking) : del);
+    top.append(nm, tSel.on ? selBox(kind, r.id, r.name, renderTracking) : del);
     const chips = document.createElement("div"); chips.className = "row";
-    if (r.pending) chips.append(r.src === "onedrive" ? chip("En traitement", "") : chip("Envoyé", "ok"));
+    if (r.src === "mail") {
+      chips.append(chip("✉ Reçue par mail", "ok"), chip("✓ Traitée", "ok"));
+      chips.append(r.matched === "ok" ? chip("✓ Rapproché", "ok", r.q) : r.matched === "valider" ? chip("… Qonto à valider", "warn") : r.q ? chip(r.q, "") : chip("○ Rapprochement", ""));
+    }
+    else if (r.pending) chips.append(r.src === "onedrive" ? chip("En traitement", "") : chip("Envoyé", "ok"));
     else if (r.where === "absent") chips.append(chip("Introuvable", "warn", "Déplacé hors de portée ou supprimé"));
     else {
       chips.append(r.renamed ? chip("✓ Renommé", "ok") : chip("○ À renommer", ""));
       chips.append(r.where === "classe" ? chip("✓ Classé", "ok", r.path) : r.where === "verifier" ? chip("! À vérifier", "warn", r.path) : chip("○ À classer", ""));
       chips.append(r.matched === "ok" ? chip("✓ Rapproché", "ok", r.q) : r.matched === "valider" ? chip("… Qonto à valider", "warn", "Validez le rattachement dans le fil Claude") : r.q ? chip(r.q, "") : chip("○ Rapprochement", ""));
     }
-    const when = document.createElement("div"); when.className = "hint"; when.textContent = (r.src === "onedrive" ? "Déposé dans OneDrive, traitement lancé le " : "Envoyé le ") + new Date(r.at).toLocaleString("fr-FR", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
+    const when = document.createElement("div"); when.className = "hint"; when.textContent = r.src === "mail" ? "Traitée par mail le " + new Date(r.at).toLocaleDateString("fr-FR") + (r.ttc !== undefined && r.ttc !== "" ? " · " + eur(r.ttc) : "") : (r.src === "onedrive" ? "Déposé dans OneDrive, traitement lancé le " : "Envoyé le ") + new Date(r.at).toLocaleString("fr-FR", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
     el.append(top, chips);
     if (r.motif) el.append(motifLine(r.motif));
     el.append(when); list.append(el);
   }
 }
-$("trackRefresh").onclick = refreshTracking;
+$("trackRefresh").onclick = $("mailRefresh").onclick = refreshTracking;
+$("inboxRefresh").onclick = () => { refreshInbox(); refreshTracking(); };
 
 /* ---------- Factures électroniques Qonto : PDF rangés dans Fournisseurs/<NOM>/<AAAA> ---------- */
 const LEDGER = "efactures_classees.json";
@@ -1139,8 +1165,8 @@ function showErrors(list){
 }
 
 async function runNow(mode){
-  mode = mode === "qonto" ? "qonto" : "";
-  const btn = $(mode ? "qontoImport" : "runNow"), msg = $(mode ? "qontoMsg" : "runMsg");
+  mode = mode === "qonto" || mode === "mail" ? mode : "";
+  const btn = $(mode === "qonto" ? "qontoImport" : mode === "mail" ? "runMail" : "runNow"), msg = $(mode === "qonto" ? "qontoMsg" : mode === "mail" ? "mailMsg" : "runMsg");
   if (!API_URL) { msg.textContent = "Le service de lancement n'est pas encore configuré."; return; }
   btn.disabled = true; msg.className = "hint"; msg.textContent = "Lancement… (jusqu'à 1 minute si le service était en veille)";
   try {
@@ -1164,7 +1190,7 @@ async function runNow(mode){
     catch(e) { errors = errors.concat(["Factures à déposer sur OneDrive : " + (e.status ? errText(e) : (e.message || String(e)))]); }
     try { const qr = await processQontoQueue(token, msg); if (qr) { done += qr.text; errors = errors.concat(qr.errors); } }
     catch(e) { errors = errors.concat(["Justificatifs à joindre sur Qonto : " + (e.status ? errText(e) : (e.message || String(e)))]); }
-    if (mode) {
+    if (mode === "qonto") {
       try { const res = await importQontoPdfs(token, msg); done += res.text; errors = errors.concat(res.errors); }
       catch(e) { done += "PDF non rangés. "; errors = errors.concat([e.message || String(e)]); }
       showErrors(errors);
@@ -1173,12 +1199,15 @@ async function runNow(mode){
     const r = await fetch(API_URL + "/run", { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify({ mode, report }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
-    msg.textContent = mode ? done + "Import lancé. Les factures apparaîtront ici dans quelques minutes (bouton Actualiser du suivi)." : done + "Traitement lancé. Le compte rendu arrivera dans Claude ; actualisez le suivi dans quelques minutes.";
-    store.set("scanner.lastRun", Date.now()); if (!mode) { refreshInbox(); refreshTracking(); for (const t of [180000, 360000, 600000]) setTimeout(() => { refreshInbox(); refreshTracking(); }, t); }
-  } catch(e) { if (mode) showErrors([].concat($("qontoErrors") && $("qontoErrors").dataset.list ? JSON.parse($("qontoErrors").dataset.list) : [], ["Lancement du traitement : " + (e.message || e)])); msg.className = "msg"; msg.textContent = "Lancement impossible : " + (e.code === "signed_out" ? "reconnectez-vous." : e instanceof TypeError ? "le service de lancement ne répond pas (" + API_URL + "). Réessayez dans une minute." : e.message); }
+    msg.textContent = mode === "qonto" ? done + "Import lancé. Les factures apparaîtront ici dans quelques minutes (bouton Actualiser du suivi)."
+      : mode === "mail" ? done + "Traitement des mails lancé. Les factures trouvées apparaîtront ci-dessous d'ici quelques minutes, avec leur motif en cas de problème."
+      : done + "Traitement lancé. Les factures apparaîtront ci-dessous d'ici quelques minutes, avec leur motif en cas de problème.";
+    store.set("scanner.lastRun", Date.now()); if (mode !== "qonto") { refreshInbox(); refreshTracking(); for (const t of [180000, 360000, 600000]) setTimeout(async () => { try { await processDepositQueue(await getToken(), null); } catch(e) {} refreshInbox(); refreshTracking(); }, t); }
+  } catch(e) { if (mode === "qonto") showErrors([].concat($("qontoErrors") && $("qontoErrors").dataset.list ? JSON.parse($("qontoErrors").dataset.list) : [], ["Lancement du traitement : " + (e.message || e)])); msg.className = "msg"; msg.textContent = "Lancement impossible : " + (e.code === "signed_out" ? "reconnectez-vous." : e instanceof TypeError ? "le service de lancement ne répond pas (" + API_URL + "). Réessayez dans une minute." : e.message); }
   finally { setTimeout(() => { btn.disabled = false; }, 30000); }
 }
 $("runNow").onclick = () => runNow();
+$("runMail").onclick = () => runNow("mail");
 
 /* ---------- Dossier « À traiter » : nombre de fichiers en attente ---------- */
 async function trackInbox(){
@@ -1192,8 +1221,8 @@ async function trackInbox(){
 }
 let inboxBusy = false;
 async function refreshInbox(){
-  const box = $("inboxBox"), out = $("inboxCount"); if (!box) return;
-  box.hidden = !auth.signedIn; if (!auth.signedIn || inboxBusy) return;
+  const out = $("inboxCount"); if (!out) return;
+  if (!auth.signedIn || inboxBusy) return;
   const path = (CFG.defaultPath || []).map(encodeURIComponent).join("/");
   if (!path) { out.textContent = "Dossier non configuré"; return; }
   inboxBusy = true; $("inboxRefresh").disabled = true;
@@ -1204,7 +1233,6 @@ async function refreshInbox(){
   } catch(e) { out.textContent = "Contenu indisponible (" + (e.status ? errText(e) : (e.message || String(e))) + ")"; }
   finally { inboxBusy = false; $("inboxRefresh").disabled = false; }
 }
-$("inboxRefresh").onclick = () => refreshInbox();
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && auth.signedIn) refreshInbox(); });
 $("qontoImport").onclick = () => runNow("qonto");
 
@@ -1214,7 +1242,7 @@ const STATUS = { queued: ["En attente", ""], processing: ["Cadrage…", "busy"],
 
 function render(){
   renderTracking(); renderQonto();
-  renderDest(); renderAccount(); $("signinBox").hidden = auth.signedIn; $("inboxBox").hidden = !auth.signedIn;
+  renderDest(); renderAccount(); $("signinBox").hidden = auth.signedIn;
   const q = $("queue");
   q.textContent = "";
   if (!items.length) {
