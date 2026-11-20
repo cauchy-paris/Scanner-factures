@@ -138,6 +138,7 @@ async function boot(){
       sessionStorage.removeItem("scanner.silentTried");
       await initDest();
       refreshTracking();
+      refreshInbox();
       autoQueue();
     } catch(e) { showBanner(errText(e), true); }
   }
@@ -796,7 +797,7 @@ async function sendAll(){
     render();
   }
   sending = false; render(); renderTracking();
-  setTimeout(refreshTracking, 1500);
+  setTimeout(refreshTracking, 1500); setTimeout(refreshInbox, 1500);
 }
 $("sendBtn").onclick = sendAll;
 $("clearDone").onclick = () => { items = items.filter(x => { if (x.status === "sent") { if (x.thumb) URL.revokeObjectURL(x.thumb); return false; } return true; }); render(); };
@@ -1121,11 +1122,29 @@ async function runNow(mode){
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
     msg.textContent = mode ? done + "Import lancé. Les factures apparaîtront ici dans quelques minutes (bouton Actualiser du suivi)." : done + "Traitement lancé. Le compte rendu arrivera dans Claude ; actualisez le suivi dans quelques minutes.";
-    store.set("scanner.lastRun", Date.now());
+    store.set("scanner.lastRun", Date.now()); if (!mode) { refreshInbox(); setTimeout(refreshInbox, 180000); }
   } catch(e) { if (mode) showErrors([].concat($("qontoErrors") && $("qontoErrors").dataset.list ? JSON.parse($("qontoErrors").dataset.list) : [], ["Lancement du traitement : " + (e.message || e)])); msg.className = "msg"; msg.textContent = "Lancement impossible : " + (e.code === "signed_out" ? "reconnectez-vous." : e instanceof TypeError ? "le service de lancement ne répond pas (" + API_URL + "). Réessayez dans une minute." : e.message); }
   finally { setTimeout(() => { btn.disabled = false; }, 30000); }
 }
 $("runNow").onclick = () => runNow();
+
+/* ---------- Dossier « À traiter » : nombre de fichiers en attente ---------- */
+let inboxBusy = false;
+async function refreshInbox(){
+  const box = $("inboxBox"), out = $("inboxCount"); if (!box) return;
+  box.hidden = !auth.signedIn; if (!auth.signedIn || inboxBusy) return;
+  const path = (CFG.defaultPath || []).map(encodeURIComponent).join("/");
+  if (!path) { out.textContent = "Dossier non configuré"; return; }
+  inboxBusy = true; $("inboxRefresh").disabled = true;
+  try {
+    const list = await graph("/me/drive/root:/" + path + ":/children?$select=id,name,file&$top=200");
+    const n = (list.value || []).filter(f => f.file).length;
+    out.textContent = n ? n + " fichier" + (n > 1 ? "s" : "") + " en attente de traitement" : "Aucun fichier en attente";
+  } catch(e) { out.textContent = "Contenu indisponible (" + (e.status ? errText(e) : (e.message || String(e))) + ")"; }
+  finally { inboxBusy = false; $("inboxRefresh").disabled = false; }
+}
+$("inboxRefresh").onclick = () => refreshInbox();
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && auth.signedIn) refreshInbox(); });
 $("qontoImport").onclick = () => runNow("qonto");
 
 /* ---------- Rendu ---------- */
@@ -1134,7 +1153,7 @@ const STATUS = { queued: ["En attente", ""], processing: ["Cadrage…", "busy"],
 
 function render(){
   renderTracking(); renderQonto();
-  renderDest(); renderAccount(); $("signinBox").hidden = auth.signedIn;
+  renderDest(); renderAccount(); $("signinBox").hidden = auth.signedIn; $("inboxBox").hidden = !auth.signedIn;
   const q = $("queue");
   q.textContent = "";
   if (!items.length) {
