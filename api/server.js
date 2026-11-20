@@ -8,6 +8,7 @@ const ROUTINE_ID = process.env.ROUTINE_ID || "";
 const ROUTINE_TOKEN = process.env.ROUTINE_TOKEN || "";
 const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || "").toLowerCase().split(/[,\s]+/).filter(Boolean);
 const MIN_INTERVAL_MS = +(process.env.MIN_INTERVAL_MS || 120000);
+const RUN_WINDOW_MS = +(process.env.RUN_WINDOW_MS || 12 * 60000); // durée habituelle d'un passage
 const QONTO_LOGIN = process.env.QONTO_LOGIN || "";
 const QONTO_SECRET_KEY = process.env.QONTO_SECRET_KEY || "";
 const QONTO_API = "https://thirdparty.qonto.com/v2";
@@ -153,7 +154,12 @@ http.createServer(async (req, res) => {
 
   // 2. anti-rafale
   const now = Date.now();
-  if (now - lastRun < MIN_INTERVAL_MS) return send(res, origin, 429, { error: "Un traitement vient d'être lancé. Réessayez dans " + Math.ceil((MIN_INTERVAL_MS - (now - lastRun)) / 1000) + " s." });
+  // un seul traitement à la fois : deux passages en parallèle s'écrasent mutuellement le tableau
+  const busy = Math.max(MIN_INTERVAL_MS, RUN_WINDOW_MS);
+  if (now - lastRun < busy) {
+    const hm = t => new Date(t).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Paris" });
+    return send(res, origin, 429, { error: "Un traitement est déjà en cours (lancé à " + hm(lastRun) + "). Pour ne pas abîmer le tableau, attendez sa fin : réessayez vers " + hm(lastRun + busy) + "." });
+  }
 
   // 3. type de lancement : traitement normal, ou import de toutes les e-factures Qonto
   let mode = "", report = "";
