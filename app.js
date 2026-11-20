@@ -848,7 +848,7 @@ function eur(v){ const n = +v; return isFinite(n) && v !== "" ? n.toLocaleString
 async function refreshTracking(){
   if (!auth.signedIn || trackState.loading) return;
   const hist = loadHist();
-  trackState.loading = true; trackState.err = ""; renderTracking();
+  loadTransfers(); trackState.loading = true; trackState.err = ""; renderTracking();
   try {
     const info = {};
     for (let i = 0; i < hist.length; i += 20) {
@@ -977,6 +977,65 @@ function renderQonto(){
   }
   if (!qSel.on && shown.length > 15) { const more = document.createElement("div"); more.className = "hint"; more.textContent = "… et " + (shown.length - 15) + " autres dans le tableau des dépenses."; list.append(more); }
 }
+
+/* ---------- Virements fournisseurs préparés (onglet Factures Qonto) ----------
+   Le traitement crée sur Qonto une demande de virement pour chaque facture fournisseur non payée et la note dans
+   _Automatisation/virements_prepares.json : { "virements": [ { request_id, fournisseur, numero, montant, echeance, fichier, url, statut, motif } ] }.
+   L'appli affiche ces demandes ; le bouton « Validation virement » ouvre la page Qonto où Farid les valide (double authentification). */
+const TRANSFERS = "virements_prepares.json";
+const QONTO_TRANSFERS_URL = CFG.qontoTransfersUrl || "https://app.qonto.com/";
+let virRows = null, virBusy = false;
+const vKey = r => "vir:" + (r.request_id || (r.fournisseur + "|" + r.numero));
+const vHideKey = () => "scanner.virHidden";
+async function loadTransfers(){
+  if (!auth.signedIn || !CFG.automationFolderId || virBusy) return;
+  virBusy = true; $("virRefresh").disabled = true; $("virCount").textContent = "Mise à jour…";
+  try {
+    const r = await fetch(GRAPH + "/me/drive/items/" + CFG.automationFolderId + ":/" + TRANSFERS + ":/content", { headers: { Authorization: "Bearer " + await getToken() }, cache: "no-store" });
+    if (r.status === 404) virRows = [];
+    else if (!r.ok) throw new Error("HTTP " + r.status);
+    else { const j = await r.json(); virRows = ((j && j.virements) || []).filter(x => x && x.fournisseur); }
+    renderTransfers();
+  } catch(e) { $("virCount").textContent = "Liste indisponible (" + (e.status ? errText(e) : (e.message || String(e))) + ")"; }
+  finally { virBusy = false; $("virRefresh").disabled = false; }
+}
+function renderTransfers(){
+  const list = $("virList"); if (!list) return; list.textContent = "";
+  if (virRows === null) return;
+  const open = r => /valider|attente|pending/i.test(r.statut || "");
+  const todo = virRows.filter(open);
+  const total = todo.reduce((s, r) => s + (+r.montant || 0), 0);
+  $("virCount").textContent = todo.length ? todo.length + " virement" + (todo.length > 1 ? "s" : "") + " à valider · " + eur(total) : "Aucun virement en attente de validation";
+  const hidden = new Set(store.get(vHideKey(), []));
+  const rows = todo.concat(virRows.filter(r => !open(r))).filter(r => !hidden.has(vKey(r))).slice(0, 12);
+  const today = new Date().toISOString().slice(0, 10);
+  for (const r of rows) {
+    const el = document.createElement("div"); el.className = "trow";
+    const top = document.createElement("div"); top.className = "ttop";
+    const nm = r.url ? document.createElement("a") : document.createElement("div"); nm.className = "tname";
+    nm.textContent = r.fournisseur + " · " + eur(r.montant) + (r.numero ? " · facture " + r.numero : "");
+    if (r.url) { nm.href = r.url; nm.target = "_blank"; nm.rel = "noopener"; nm.title = "Ouvrir la facture"; }
+    const del = document.createElement("button"); del.type = "button"; del.className = "tdel"; del.textContent = "✕";
+    del.title = "Retirer cet encadré"; del.setAttribute("aria-label", "Retirer l'encadré du virement " + r.fournisseur + " " + eur(r.montant));
+    del.onclick = () => {
+      if (!confirm("Retirer l'encadré « " + r.fournisseur + " · " + eur(r.montant) + " » ?\n\nSeul l'affichage dans l'appli est supprimé : la demande de virement reste sur Qonto.")) return;
+      store.set(vHideKey(), [...hidden, vKey(r)]); renderTransfers();
+    };
+    top.append(nm, del);
+    const chips = document.createElement("div"); chips.className = "row";
+    const st = String(r.statut || "");
+    chips.append(open(r) ? chip("… À valider sur Qonto", "warn") : /approuv|pay|valid/i.test(st) ? chip("✓ " + st, "ok") : chip(st || "?", /refus|annul|erreur/i.test(st) ? "err" : ""));
+    const late = open(r) && r.echeance && r.echeance < today;
+    if (r.echeance) chips.append(chip((late ? "En retard · échéance " : "Échéance ") + xlDate(r.echeance.split("-").reverse().join("/")), late ? "err" : ""));
+    el.append(top, chips); if (r.motif) el.append(motifLine(r.motif)); list.append(el);
+  }
+  if (hidden.size && virRows.some(r => hidden.has(vKey(r)))) {
+    const back = document.createElement("button"); back.type = "button"; back.className = "btn ghost small"; back.style.alignSelf = "flex-start";
+    back.textContent = "Réafficher les encadrés retirés"; back.onclick = () => { store.set(vHideKey(), []); renderTransfers(); }; list.append(back);
+  }
+}
+$("virGo").href = QONTO_TRANSFERS_URL;
+$("virRefresh").onclick = () => loadTransfers();
 
 function motifLine(text){ const d = document.createElement("div"); d.className = "motif"; d.textContent = "Motif : " + text; return d; }
 function chip(text, cls, title){ const s = document.createElement("span"); s.className = "pill " + (cls || ""); s.textContent = text; if (title) s.title = title; return s; }

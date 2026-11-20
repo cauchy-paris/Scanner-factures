@@ -157,6 +157,7 @@ header.top{display:flex;justify-content:space-between;align-items:flex-start;gap
 .xlrow{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:12px 0 4px}.xlrow .btn{flex:none}
 .ibcount{font-size:15px;font-weight:600;color:var(--fg);font-variant-numeric:tabular-nums}
 .bigrun{justify-content:center;min-height:52px;font-size:16px}
+a.btn{text-decoration:none}
 #odBox,#mailBox{order:0}
 .tlist{display:flex;flex-direction:column;gap:8px}
 .trow{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;min-width:0}
@@ -293,6 +294,21 @@ body:not([data-tab="onedrive"]) .tab-onedrive,body:not([data-tab="gmail"]) .tab-
     </button>
   </section>
   <section class="track tab-qonto" id="qontoBox" hidden aria-labelledby="qontoTitle">
+    <div class="inbox" id="virBox">
+      <div class="ibtop">
+        <div class="info">
+          <div class="label">Virements fournisseurs à valider</div>
+          <div class="ibcount" id="virCount">…</div>
+        </div>
+        <button class="btn ghost small" id="virRefresh" type="button">Actualiser</button>
+      </div>
+      <a class="btn primary bigrun" id="virGo" href="#" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        Validation virement
+      </a>
+      <div class="hint">Pour chaque facture fournisseur non payée, le traitement prépare la demande de virement sur Qonto (IBAN, montant, facture jointe). Rien ne part sans votre validation sur Qonto, avec votre double authentification.</div>
+      <div class="tlist" id="virList"></div>
+    </div>
     <div class="qhead">
       <div class="label" id="qontoTitle">Factures reçues sur Qonto</div>
     </div>

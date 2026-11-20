@@ -12,5 +12,7 @@ window.SCANNER_CONFIG = {
   // et registre des factures déjà rangées (dossier _Automatisation)
   suppliersFolderId: "017P3ARQVKKZ3MJY6QCNGJGYE2TQP37RYG",
   automationFolderId: "017P3ARQQAC45FNQBOS5GIWQLCH2Q5TZFV",
+  // Page Qonto des demandes de virement à valider (bouton « Validation virement » de l'onglet Factures Qonto)
+  qontoTransfersUrl: "https://app.qonto.com/organizations/groupe-cauchy-4607/requests/pending",
   autoFolderNote: "Ce dossier est traité automatiquement chaque matin à 7 h 38."
 };
