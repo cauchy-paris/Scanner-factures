@@ -724,6 +724,24 @@ async function scannedPdfToJpeg(blob){
     return { jpg, thumb: await new Promise(r => t.toBlob(r, "image/jpeg", .8)), pages: pdf.numPages };
   } finally { pdf.destroy(); }
 }
+// Télécharge un fichier OneDrive : lien de téléchargement direct (sans en-tête d'autorisation, donc sans
+// problème de redirection entre domaines), 3 essais, puis repli sur /content.
+async function downloadItem(id){
+  let last = null;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const it = await graph("/me/drive/items/" + encodeURIComponent(id) + "?$select=id,size,@microsoft.graph.downloadUrl");
+      const url = it["@microsoft.graph.downloadUrl"];
+      const r = url ? await fetch(url, { cache: "no-store" })
+        : await fetch(GRAPH + "/me/drive/items/" + encodeURIComponent(id) + "/content", { headers: { Authorization: "Bearer " + await getToken() } });
+      if (!r.ok) { const e = new Error(r.status === 404 ? "fichier introuvable sur OneDrive (déplacé ou supprimé ?)" : "téléchargement OneDrive impossible (HTTP " + r.status + ")"); e.status = r.status; throw e; }
+      const b = await r.blob();
+      if (it.size && b.size !== it.size) throw new Error("téléchargement incomplet (" + b.size + " octets sur " + it.size + ")");
+      return b;
+    } catch(e) { last = e; if (e.status === 404) break; await new Promise(r => setTimeout(r, 1500 * (i + 1))); }
+  }
+  throw last;
+}
 // Avant un lancement : convertit les PDF scannés déjà présents dans « À traiter ».
 // L'original est déplacé (pas supprimé) dans _Automatisation/PDF scannés d'origine.
 async function convertScannedInInbox(msg){
@@ -736,9 +754,7 @@ async function convertScannedInInbox(msg){
   for (const f of pdfs) {
     msg.textContent = "Vérification des PDF de « À traiter » : " + f.name + "…";
     try {
-      const r = await fetch(GRAPH + "/me/drive/items/" + f.id + "/content", { headers: { Authorization: "Bearer " + await getToken() } });
-      if (!r.ok) throw new Error("téléchargement HTTP " + r.status);
-      const conv = await scannedPdfToJpeg(await r.blob());
+      const conv = await scannedPdfToJpeg(await downloadItem(f.id));
       if (!conv) continue;
       const res = await uploadBlob(f.parentReference.id, baseName(f.name) + ".jpg", conv.jpg);
       if (!keep && CFG.automationFolderId) {
@@ -751,7 +767,7 @@ async function convertScannedInInbox(msg){
       const h = loadHist(), i = h.findIndex(x => x.id === f.id);
       if (i >= 0 && res && res.id) { h[i] = { ...h[i], id: res.id, name: res.name, webUrl: res.webUrl || "" }; store.set(histKey(), h); }
       done.push(f.name + " → " + (res && res.name || baseName(f.name) + ".jpg"));
-    } catch(e) { errors.push(f.name + " : conversion en JPEG impossible (" + (e.status ? errText(e) : (e.message || String(e))) + ")"); }
+    } catch(e) { errors.push(f.name + " : vérification du PDF impossible (" + (e.status ? errText(e) : (e.message || String(e))) + "). Le fichier reste dans « À traiter » et sera lu tel quel par le traitement."); }
   }
   return { done, errors };
 }
@@ -1073,9 +1089,7 @@ async function processQontoQueue(token, msg){
       if (msg) msg.textContent = "Envoi des justificatifs vers Qonto : " + (done.length + errors.length + 1) + " / " + todo.length + "…";
       const nom = x.fichier || x.item_id;
       try {
-        const f = await fetch(GRAPH + "/me/drive/items/" + encodeURIComponent(x.item_id) + "/content", { headers: { Authorization: "Bearer " + await getToken() } });
-        if (!f.ok) throw new Error(f.status === 404 ? "fichier introuvable sur OneDrive (déplacé ou supprimé ?)" : "téléchargement OneDrive impossible (HTTP " + f.status + ")");
-        const blob = await f.blob();
+        const blob = await downloadItem(x.item_id);
         const type = /\.pdf$/i.test(nom) ? "application/pdf" : /\.png$/i.test(nom) ? "image/png" : /\.jpe?g$/i.test(nom) ? "image/jpeg" : (blob.type || "application/pdf");
         const a = await fetch(API_URL + "/qonto/attach?transaction=" + encodeURIComponent(x.transaction_id), { method: "POST", body: blob,
           headers: { Authorization: "Bearer " + token, "Content-Type": type, "X-File-Name": encodeURIComponent(nom) } });
