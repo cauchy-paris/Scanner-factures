@@ -1152,6 +1152,88 @@ async function processDepositQueue(token, msg){
     return { text: done.length ? done.length + " facture" + (done.length > 1 ? "s" : "") + " reçue" + (done.length > 1 ? "s" : "") + " par mail déposée" + (done.length > 1 ? "s" : "") + " sur OneDrive : " + done.join(" ; ") + ". " : "", errors: errors.map(m => "Dépôt OneDrive " + m) };
   } finally { depositBusy = false; }
 }
+/* ---------- Tableau Excel « Dépenses 2026.xlsx », régénéré par l'appli depuis depenses.json ----------
+   La routine ne peut pas transmettre un fichier Excel sans l'abîmer (« content is damaged ») : elle n'écrit que
+   _Automatisation/depenses.json, et l'appli refait l'Excel avec le jeton Microsoft de Farid dès que le JSON
+   est plus récent que l'Excel (à l'ouverture, au retour sur l'appli et après chaque lancement). Même mise en
+   forme que build_depenses.py : feuille « Dépenses » (14 colonnes, filtre, volet figé) et feuille « Synthèse ». */
+const EXPENSES_JSON = "depenses.json";
+let excelBusy = false, excelLib = null;
+function loadExcelLib(){
+  if (window.ExcelJS) return Promise.resolve(window.ExcelJS);
+  return excelLib || (excelLib = new Promise((ok, ko) => {
+    const s = document.createElement("script"); s.src = "vendor/exceljs.min.js";
+    s.onload = () => window.ExcelJS ? ok(window.ExcelJS) : ko(new Error("bibliothèque Excel non chargée"));
+    s.onerror = () => { excelLib = null; ko(new Error("bibliothèque Excel injoignable")); };
+    document.head.append(s);
+  }));
+}
+async function buildExpensesXlsx(rows){
+  const ExcelJS = await loadExcelLib();
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Dépenses", { views: [{ state: "frozen", ySplit: 1 }] });
+  const cols = ["Date","Fournisseur","N° facture","Catégorie","Montant HT","Taux TVA","TVA","Montant TTC",
+    "Contrôle HT+TVA=TTC","Justificatif","Transaction Qonto","Source","Date de traitement","Motif / erreur"];
+  const widths = [12,24,16,18,13,10,12,13,14,40,22,12,16,50];
+  ws.columns = cols.map((c, i) => ({ width: widths[i] }));
+  const head = ws.addRow(cols); head.height = 30;
+  head.eachCell(c => { c.font = { bold: true, color: { argb: "FFFFFFFF" } }; c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
+    c.alignment = { horizontal: "center", vertical: "middle", wrapText: true }; });
+  const d = s => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || "")); return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : null; };
+  const num = v => v === "" || v == null || !isFinite(+v) ? (v == null ? null : v) : +v;
+  const list = rows.slice().sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  for (const r of list) {
+    const row = ws.addRow([d(r.date), r.fournisseur || "", r.numero || "", r.categorie || "", num(r.ht), num(r.taux_tva), num(r.tva), num(r.ttc),
+      r.controle || "", null, r.qonto || "", r.source || "", d(r.traite_le), r.motif || ""]);
+    const j = row.getCell(10);
+    if (r.justificatif) { j.value = { text: r.nom_fichier || "Ouvrir", hyperlink: String(r.justificatif) }; j.font = { color: { argb: "FF0563C1" }, underline: true }; }
+    else if (r.nom_fichier) j.value = r.nom_fichier;
+    row.getCell(1).numFmt = row.getCell(13).numFmt = "DD/MM/YYYY";
+    for (const c of [5, 7, 8]) row.getCell(c).numFmt = '#,##0.00 "€"';
+    row.getCell(6).numFmt = "0.0%";
+  }
+  ws.autoFilter = "A1:N" + Math.max(ws.rowCount, 1);
+  const s = wb.addWorksheet("Synthèse");
+  const sh = s.addRow(["Mois","Total HT","Total TVA","Total TTC"]);
+  sh.eachCell(c => { c.font = { bold: true, color: { argb: "FFFFFFFF" } }; c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } }; });
+  const mois = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
+  mois.forEach((m, i) => s.addRow([m].concat(["E","G","H"].map(c => ({ formula: 'SUMPRODUCT((Dépenses!$A$2:$A$2000<>"")*(MONTH(Dépenses!$A$2:$A$2000+0)=' + (i + 1) + ')*Dépenses!' + c + '$2:' + c + '$2000)' })))));
+  const tot = s.addRow(["Total 2026", { formula: "SUM(B2:B13)" }, { formula: "SUM(C2:C13)" }, { formula: "SUM(D2:D13)" }]);
+  tot.eachCell(c => { c.font = { bold: true }; });
+  for (let r = 2; r <= 14; r++) for (const c of ["B","C","D"]) s.getCell(c + r).numFmt = '#,##0.00 "€"';
+  s.columns.forEach(c => { c.width = 14; });
+  return new Blob([await wb.xlsx.writeBuffer()], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+// Régénère l'Excel si depenses.json est plus récent (force : dans tous les cas). Renvoie un texte de compte rendu, ou "".
+async function rebuildExpenses(force){
+  if (!auth.signedIn || !CFG.automationFolderId || !EXPENSES_PATH || excelBusy) return "";
+  excelBusy = true;
+  try {
+    const src = await graph("/me/drive/items/" + CFG.automationFolderId + ":/" + EXPENSES_JSON + "?$select=id,lastModifiedDateTime");
+    const p = EXPENSES_PATH.split("/").map(encodeURIComponent).join("/");
+    let xl = null;
+    try { xl = await graph("/me/drive/root:/" + p + "?$select=id,lastModifiedDateTime"); } catch(e) { if (e.status !== 404) throw e; }
+    if (!force && xl && Date.parse(xl.lastModifiedDateTime) >= Date.parse(src.lastModifiedDateTime)) return "";
+    const r = await fetch(GRAPH + "/me/drive/items/" + src.id + "/content", { headers: { Authorization: "Bearer " + await getToken() }, cache: "no-store" });
+    if (!r.ok) throw new Error("lecture de " + EXPENSES_JSON + " impossible (HTTP " + r.status + ")");
+    const data = await r.json();
+    const rows = Array.isArray(data) ? data : (data && (data.lignes || data.rows)) || [];
+    if (!rows.length) throw new Error(EXPENSES_JSON + " ne contient aucune ligne : Excel laissé tel quel");
+    const blob = await buildExpensesXlsx(rows);
+    try {
+      await graph(xl ? "/me/drive/items/" + xl.id + "/content" : "/me/drive/root:/" + p + ":/content", { method: "PUT", body: blob, headers: { "Content-Type": blob.type } });
+    } catch(e) {
+      if (e.status === 423 || e.code === "resourceLocked" || e.code === "notAllowed") throw new Error("Dépenses 2026.xlsx est ouvert dans Excel : fermez-le, il sera mis à jour au prochain retour sur l'appli");
+      throw e;
+    }
+    store.set("scanner.excelAt", Date.now());
+    return "Tableau Dépenses 2026.xlsx mis à jour (" + rows.length + " lignes). ";
+  } finally { excelBusy = false; }
+}
+async function autoExcel(force){
+  try { const t = await rebuildExpenses(force); if (t && force) showBanner(t.trim(), false); return t; }
+  catch(e) { const m = "Tableau Excel : " + (e.status ? errText(e) : (e.message || String(e))); console.warn(m); showBanner(m, true); return ""; }
+}
 // À l'ouverture de l'appli : envoie en silence les justificatifs en attente
 async function autoQueue(){
   if (!API_URL || !CFG.automationFolderId) return;
@@ -1163,6 +1245,7 @@ async function autoQueue(){
     catch(e) { res = { text: res ? res.text : "", errors: (res ? res.errors : []).concat(["Dépôt OneDrive : " + (e.message || e)]) }; }
     if (res && (res.text || res.errors.length)) showBanner((res.text + (res.errors.length ? "Erreurs : " + res.errors.join(" | ") : "")).trim(), !!res.errors.length);
   } catch(e) { console.warn("File Qonto :", e); }
+  autoExcel(false);
 }
 
 function showErrors(list){
@@ -1216,7 +1299,7 @@ async function runNow(mode){
     msg.textContent = mode === "qonto" ? done + "Import lancé. Les factures apparaîtront ici dans quelques minutes (bouton Actualiser du suivi)."
       : mode === "mail" ? done + "Traitement des mails lancé. Les factures trouvées apparaîtront ci-dessous d'ici quelques minutes, avec leur motif en cas de problème."
       : done + "Traitement lancé. Les factures apparaîtront ci-dessous d'ici quelques minutes, avec leur motif en cas de problème.";
-    store.set("scanner.lastRun", Date.now()); if (mode !== "qonto") { refreshInbox(); refreshTracking(); for (const t of [180000, 360000, 600000]) setTimeout(async () => { try { await processDepositQueue(await getToken(), null); } catch(e) {} refreshInbox(); refreshTracking(); }, t); }
+    store.set("scanner.lastRun", Date.now()); if (mode !== "qonto") { refreshInbox(); refreshTracking(); for (const t of [180000, 360000, 600000]) setTimeout(async () => { try { await processDepositQueue(await getToken(), null); } catch(e) {} await autoExcel(false); refreshInbox(); refreshTracking(); }, t); }
   } catch(e) { if (mode === "qonto") showErrors([].concat($("qontoErrors") && $("qontoErrors").dataset.list ? JSON.parse($("qontoErrors").dataset.list) : [], ["Lancement du traitement : " + (e.message || e)])); msg.className = "msg"; msg.textContent = "Lancement impossible : " + (e.code === "signed_out" ? "reconnectez-vous." : e instanceof TypeError ? "le service de lancement ne répond pas (" + API_URL + "). Réessayez dans une minute." : e.message); }
   finally { setTimeout(() => { btn.disabled = false; }, 30000); }
 }
@@ -1247,8 +1330,14 @@ async function refreshInbox(){
   } catch(e) { out.textContent = "Contenu indisponible (" + (e.status ? errText(e) : (e.message || String(e))) + ")"; }
   finally { inboxBusy = false; $("inboxRefresh").disabled = false; }
 }
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && auth.signedIn) refreshInbox(); });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && auth.signedIn) { refreshInbox(); autoExcel(false); } });
 $("qontoImport").onclick = () => runNow("qonto");
+$("excelNow").onclick = async () => {
+  const b = $("excelNow"), m = $("excelMsg"); b.disabled = true; m.className = "hint"; m.textContent = "Mise à jour du tableau Excel…";
+  try { m.textContent = (await rebuildExpenses(true)) || "Tableau non mis à jour (connectez-vous)."; }
+  catch(e) { m.className = "msg"; m.textContent = "Tableau Excel : " + (e.status ? errText(e) : (e.message || String(e))); }
+  finally { b.disabled = false; }
+};
 
 /* ---------- Rendu ---------- */
 function fmtSize(n){ return n > 1048576 ? (n / 1048576).toFixed(1).replace(".", ",") + " Mo" : Math.max(1, Math.round(n / 1024)) + " Ko"; }

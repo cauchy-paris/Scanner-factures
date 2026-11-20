@@ -154,6 +154,7 @@ header.top{display:flex;justify-content:space-between;align-items:flex-start;gap
 .runbox{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
 .inbox{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;align-items:stretch}
 .inbox .ibtop{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.xlrow{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:12px 0 4px}.xlrow .btn{flex:none}
 .ibcount{font-size:15px;font-weight:600;color:var(--fg);font-variant-numeric:tabular-nums}
 .bigrun{justify-content:center;min-height:52px;font-size:16px}
 #odBox,#mailBox{order:0}
@@ -250,6 +251,10 @@ body:not([data-tab="onedrive"]) .tab-onedrive,body:not([data-tab="gmail"]) .tab-
         Lancer le traitement OneDrive
       </button>
       <div class="hint" id="runMsg">Traite tout ce qui est dans « À traiter », y compris les factures glissées à la main : renommage, rangement dans Achat, tableau des dépenses et rapprochement Qonto, sans attendre le passage de 7 h 38. En cas de problème, la facture va dans « À vérifier » avec son motif.</div>
+    </div>
+    <div class="ibtop xlrow">
+      <div class="hint" id="excelMsg">Le tableau Dépenses 2026.xlsx est refait par l'appli à partir des données du traitement, à chaque ouverture et après chaque lancement.</div>
+      <button class="btn ghost small" id="excelNow" type="button">Mettre à jour l'Excel</button>
     </div>
     <div class="qhead"><div class="label">Factures traitées depuis OneDrive</div></div>
     <div class="hint" id="odInfo"></div>
