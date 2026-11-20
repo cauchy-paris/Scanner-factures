@@ -1069,13 +1069,58 @@ async function processQontoQueue(token, msg){
     return { text: done.length ? "Qonto : " + done.join(" ; ") + ". " : "", errors: errors.map(m => "Justificatif Qonto " + m) };
   } finally { queueBusy = false; }
 }
+/* ---------- Fichiers à déposer sur OneDrive (file remplie par la routine) ----------
+   Pièces jointes de mail trop lourdes pour l'envoi direct par la routine : elle les dépose sur Qonto
+   comme pièce jointe autonome, puis l'appli les récupère via le relais et les range dans OneDrive.
+   _Automatisation/onedrive_a_deposer.json : { "a_deposer": [ { attachment_id, fichier, dossier_id, sous_dossier, statut, motif, item_id, url } ] } */
+const DEPOSIT = "onedrive_a_deposer.json";
+let depositBusy = false;
+async function processDepositQueue(token, msg){
+  if (!CFG.automationFolderId || !API_URL || depositBusy) return null;
+  depositBusy = true;
+  try {
+    const r = await fetch(GRAPH + "/me/drive/items/" + CFG.automationFolderId + ":/" + DEPOSIT + ":/content", { headers: { Authorization: "Bearer " + await getToken() }, cache: "no-store" });
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error("lecture de " + DEPOSIT + " impossible (HTTP " + r.status + ")");
+    const q = await r.json();
+    const todo = ((q && q.a_deposer) || []).filter(x => x && x.attachment_id && x.fichier && x.dossier_id && (!x.statut || x.statut === "en attente" || (x.statut === "erreur" && (x.essais || 0) < 3)));
+    if (!todo.length) return null;
+    const done = [], errors = [];
+    for (const x of todo) {
+      if (msg) msg.textContent = "Dépôt des factures reçues par mail : " + (done.length + errors.length + 1) + " / " + todo.length + "…";
+      const rel = String(x.sous_dossier || "").split("/").filter(Boolean).concat([x.fichier]).map(encodeURIComponent).join("/");
+      try {
+        let it = null;
+        try { it = await graph("/me/drive/items/" + encodeURIComponent(x.dossier_id) + ":/" + rel + "?$select=id,webUrl"); }
+        catch(e) { if (e.status !== 404) throw e; }
+        if (!it) {
+          const blob = await (await relay("/qonto/pdf?attachment=" + encodeURIComponent(x.attachment_id), token)).blob();
+          const type = /\.pdf$/i.test(x.fichier) ? "application/pdf" : /\.png$/i.test(x.fichier) ? "image/png" : /\.jpe?g$/i.test(x.fichier) ? "image/jpeg" : (blob.type || "application/octet-stream");
+          it = await graph("/me/drive/items/" + encodeURIComponent(x.dossier_id) + ":/" + rel + ":/content?@microsoft.graph.conflictBehavior=fail",
+            { method: "PUT", body: blob, headers: { "Content-Type": type } });
+        }
+        x.statut = "depose"; x.item_id = it.id; x.url = it.webUrl || ""; x.motif = "";
+        done.push(x.fichier);
+      } catch(e) {
+        x.statut = "erreur"; x.essais = (x.essais || 0) + 1; x.motif = String(e.status ? errText(e) : (e.message || e)).slice(0, 300);
+        errors.push(x.fichier + " : " + x.motif);
+      }
+      x.traite_le = new Date().toISOString();
+    }
+    await graph("/me/drive/items/" + CFG.automationFolderId + ":/" + DEPOSIT + ":/content",
+      { method: "PUT", body: JSON.stringify(q, null, 1), headers: { "Content-Type": "application/json" } });
+    return { text: done.length ? done.length + " facture" + (done.length > 1 ? "s" : "") + " reçue" + (done.length > 1 ? "s" : "") + " par mail déposée" + (done.length > 1 ? "s" : "") + " sur OneDrive : " + done.join(" ; ") + ". " : "", errors: errors.map(m => "Dépôt OneDrive " + m) };
+  } finally { depositBusy = false; }
+}
 // À l'ouverture de l'appli : envoie en silence les justificatifs en attente
 async function autoQueue(){
   if (!API_URL || !CFG.automationFolderId) return;
   try {
     const token = await getToken();
     for (let i = 0; i < 6; i++) { try { const h = await fetch(API_URL + "/health", {cache: "no-store"}); if (h.ok) break; } catch(e) {} await new Promise(r => setTimeout(r, 8000)); }
-    const res = await processQontoQueue(token, null);
+    let res = await processQontoQueue(token, null);
+    try { const d = await processDepositQueue(token, null); if (d) res = { text: (res ? res.text : "") + d.text, errors: (res ? res.errors : []).concat(d.errors) }; }
+    catch(e) { res = { text: res ? res.text : "", errors: (res ? res.errors : []).concat(["Dépôt OneDrive : " + (e.message || e)]) }; }
     if (res && (res.text || res.errors.length)) showBanner((res.text + (res.errors.length ? "Erreurs : " + res.errors.join(" | ") : "")).trim(), !!res.errors.length);
   } catch(e) { console.warn("File Qonto :", e); }
 }
@@ -1115,6 +1160,8 @@ async function runNow(mode){
       try { const n = await trackInbox(); if (n) done += n + " fichier" + (n > 1 ? "s" : "") + " de « À traiter » ajouté" + (n > 1 ? "s" : "") + " au suivi. "; }
       catch(e) { errors = errors.concat(["Lecture de « À traiter » : " + (e.status ? errText(e) : (e.message || String(e)))]); }
     }
+    try { const dr = await processDepositQueue(token, msg); if (dr) { done += dr.text; errors = errors.concat(dr.errors); } }
+    catch(e) { errors = errors.concat(["Factures à déposer sur OneDrive : " + (e.status ? errText(e) : (e.message || String(e)))]); }
     try { const qr = await processQontoQueue(token, msg); if (qr) { done += qr.text; errors = errors.concat(qr.errors); } }
     catch(e) { errors = errors.concat(["Justificatifs à joindre sur Qonto : " + (e.status ? errText(e) : (e.message || String(e)))]); }
     if (mode) {
