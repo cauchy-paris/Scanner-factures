@@ -152,7 +152,8 @@ header.top{display:flex;justify-content:space-between;align-items:flex-start;gap
 .inbox{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;align-items:stretch}
 .inbox .ibtop{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
 .ibcount{font-size:15px;font-weight:600;color:var(--fg);font-variant-numeric:tabular-nums}
-.inbox #runNow{justify-content:center;min-height:48px}
+.bigrun{justify-content:center;min-height:52px;font-size:16px}
+#odBox,#mailBox{order:0}
 .tlist{display:flex;flex-direction:column;gap:8px}
 .trow{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;min-width:0}
 .ttop{display:flex;align-items:flex-start;gap:8px}
@@ -163,12 +164,14 @@ header.top{display:flex;justify-content:space-between;align-items:flex-start;gap
 a.tname{color:var(--accent)}
 .wrap>.queue{order:5}
 #qontoBox{order:0}
-.tabs{display:flex;gap:4px;padding:4px;background:var(--sunken);border-radius:12px}
+.tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:4px;background:var(--sunken);border-radius:12px}
 .tabs button{flex:1;border:0;background:transparent;color:var(--muted);font:inherit;font-weight:600;padding:10px 8px;border-radius:9px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px}
 .tabs button svg{width:18px;height:18px;flex:none}
 .tabs button[aria-selected="true"]{background:var(--surface);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.12)}
-body[data-tab="qonto"] .tab-photos{display:none!important}
-body[data-tab="photos"] .tab-qonto{display:none!important}
+.tabs button{min-width:0}
+@media (max-width:600px){.tabs{grid-template-columns:repeat(2,1fr)}.tabs button{padding:9px 6px}}
+body:not([data-tab="photos"]) .tab-photos,body:not([data-tab="qonto"]) .tab-qonto,
+body:not([data-tab="onedrive"]) .tab-onedrive,body:not([data-tab="gmail"]) .tab-gmail{display:none!important}
 .motif{font-size:12.5px;color:var(--fg);background:var(--sunken);border-left:3px solid #d97706;border-radius:6px;padding:6px 8px;overflow-wrap:anywhere}
 .errbox{display:flex;flex-direction:column;gap:6px}
 .bulk{gap:6px;flex-wrap:wrap}
@@ -207,22 +210,55 @@ body[data-tab="photos"] .tab-qonto{display:none!important}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 19h14"/></svg>
       Factures Qonto
     </button>
+    <button type="button" role="tab" id="tabOnedrive" data-tab="onedrive" aria-controls="odBox" aria-selected="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      OneDrive
+    </button>
+    <button type="button" role="tab" id="tabGmail" data-tab="gmail" aria-controls="mailBox" aria-selected="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 6.5L12 13l8.5-6.5"/></svg>
+      Gmail
+    </button>
   </nav>
 
-  <section class="inbox" id="inboxBox" hidden aria-labelledby="inboxTitle">
-    <div class="ibtop">
-      <div class="info">
-        <div class="label" id="inboxTitle">Dossier « À traiter » sur OneDrive</div>
-        <div class="ibcount" id="inboxCount">…</div>
+  <section class="track tab-onedrive" id="odBox" hidden aria-labelledby="odTitle">
+    <div class="inbox">
+      <div class="ibtop">
+        <div class="info">
+          <div class="label" id="odTitle">Dossier « À traiter » sur OneDrive</div>
+          <div class="ibcount" id="inboxCount">…</div>
+        </div>
+        <button class="btn ghost small" id="inboxRefresh" type="button">Actualiser</button>
       </div>
-      <button class="btn ghost small" id="inboxRefresh" type="button">Actualiser</button>
+      <button class="btn primary bigrun" id="runNow" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 4.5v15l12-7.5z"/></svg>
+        Lancer le traitement OneDrive
+      </button>
+      <div class="hint" id="runMsg">Traite tout ce qui est dans « À traiter », y compris les factures glissées à la main : renommage, rangement dans Achat, tableau des dépenses et rapprochement Qonto, sans attendre le passage de 7 h 38. En cas de problème, la facture va dans « À vérifier » avec son motif.</div>
     </div>
-    <button class="btn primary" id="runNow" type="button">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 4.5v15l12-7.5z"/></svg>
-      Lancer le traitement OneDrive
-    </button>
-    <div class="hint" id="runMsg">Traite tout ce qui est dans « À traiter », y compris les factures glissées à la main : renommage, rangement dans Achat, tableau des dépenses et rapprochement Qonto avec justificatif. Sans attendre le passage de 7 h 38.</div>
+    <div class="qhead"><div class="label">Factures traitées depuis OneDrive</div></div>
+    <div class="hint" id="odInfo"></div>
+    <div class="tlist" id="odList"></div>
   </section>
+
+  <section class="track tab-gmail" id="mailBox" hidden aria-labelledby="mailTitle">
+    <div class="inbox">
+      <div class="info">
+        <div class="label" id="mailTitle">Factures reçues par mail (Gmail)</div>
+      </div>
+      <button class="btn primary bigrun" id="runMail" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 4.5v15l12-7.5z"/></svg>
+        Lancer le traitement des mails
+      </button>
+      <div class="hint" id="mailMsg">Balaye tout de suite la boîte Gmail des factures : chaque facture pas encore marquée « Facture traitée » est renommée, rangée dans Achat, ajoutée au tableau et rapprochée sur Qonto, puis le mail reçoit le libellé « Facture traitée ».</div>
+    </div>
+    <div class="qhead">
+      <div class="label">Factures traitées par mail (30 derniers jours)</div>
+      <button class="btn ghost small" id="mailRefresh" type="button">Actualiser</button>
+    </div>
+    <div class="hint" id="mailInfo"></div>
+    <div class="tlist" id="mailList"></div>
+  </section>
+
 
   <section class="dest tab-photos" aria-label="Dossier de destination">
     <div class="info">
@@ -274,7 +310,7 @@ body[data-tab="photos"] .tab-qonto{display:none!important}
 
   <section class="track tab-photos" id="track" hidden aria-labelledby="trackTitle">
     <div class="qhead">
-      <div class="label" id="trackTitle">Suivi des factures</div>
+      <div class="label" id="trackTitle">Suivi des envois</div>
       <span class="row"><button class="btn ghost small" id="trackClearLost" type="button" hidden>Retirer les introuvables</button>
       <button class="btn ghost small" id="trackRefresh" type="button">Actualiser</button></span>
     </div>

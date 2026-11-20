@@ -162,7 +162,9 @@ http.createServer(async (req, res) => {
     const b = raw ? (JSON.parse(raw) || {}) : {};
     mode = String(b.mode || ""); report = String(b.report || "").replace(/[\r\n]+/g, " ").slice(0, 1500);
   } catch (e) { mode = ""; }
-  const text = (mode === "qonto"
+  const text = (mode === "mail"
+    ? "Lancement manuel depuis l'appli Scanner de factures : Traitement mail. Balayer tout de suite la boîte Gmail (§1 de la procédure, recherche élargie aux 30 derniers jours, toujours sans les mails déjà marqués « Facture traitée »), puis traiter chaque facture trouvée (renommage, rangement, tableau, rapprochement Qonto) et poser le libellé « Facture traitée »."
+    : mode === "qonto"
     ? "Lancement manuel depuis l'appli Scanner de factures : Importer les factures Qonto (toutes les factures électroniques fournisseurs depuis le 01/01/2026, §2 bis de la procédure, avec anti-doublon). L'appli vient de ranger les PDF dans Fournisseurs/<NOM>/<AAAA> : mets le lien « justificatif » des lignes d'après _Automatisation/efactures_classees.json. Puis le traitement habituel."
     : "Lancement manuel depuis l'appli Scanner de factures.")
     + (report ? " Résultat de l'import côté appli (à recopier tel quel dans le compte rendu) : " + report : "");
