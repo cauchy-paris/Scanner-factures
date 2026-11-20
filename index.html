@@ -21,6 +21,7 @@ img{max-width:100%}
 :root{
   --bg:#eef1f5; --surface:#ffffff; --sunken:#e3e8ef; --fg:#14202e; --muted:#5b6878; --line:#cfd7e2;
   --accent:#1d4ed8; --accent-fg:#ffffff; --accent-soft:#dbe5fb;
+  --c-photos:#1d4ed8; --c-photos-soft:#dbe5fb; --c-qonto:#6d28d9; --c-qonto-soft:#ebe3fd; --c-onedrive:#0f766e; --c-onedrive-soft:#d5f0ec; --c-gmail:#c2410c; --c-gmail-soft:#fde4d6; --tab-fg:#ffffff;
   --ok:#137a43; --ok-soft:#d7f0e1; --warn:#9a5b00; --warn-soft:#fcecd0; --err:#b42318; --err-soft:#fbe0dd;
   --shade:rgba(10,18,30,.72);
   --f-ui:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
@@ -29,11 +30,13 @@ img{max-width:100%}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
   --bg:#0f151d; --surface:#18212c; --sunken:#111821; --fg:#e6ebf2; --muted:#93a0b2; --line:#2b3744;
   --accent:#6e9bff; --accent-fg:#0b1220; --accent-soft:#1d2c4a;
+  --c-photos:#6e9bff; --c-photos-soft:#1d2c4a; --c-qonto:#b69cff; --c-qonto-soft:#2c2347; --c-onedrive:#3fc1b0; --c-onedrive-soft:#123631; --c-gmail:#ff9a6b; --c-gmail-soft:#42261a; --tab-fg:#0b1220;
   --ok:#52c98a; --ok-soft:#163626; --warn:#e7a948; --warn-soft:#3a2a10; --err:#ff8a7d; --err-soft:#3d1a17;
   --shade:rgba(0,0,0,.8); color-scheme:dark}}
 :root[data-theme="dark"]{
   --bg:#0f151d; --surface:#18212c; --sunken:#111821; --fg:#e6ebf2; --muted:#93a0b2; --line:#2b3744;
   --accent:#6e9bff; --accent-fg:#0b1220; --accent-soft:#1d2c4a;
+  --c-photos:#6e9bff; --c-photos-soft:#1d2c4a; --c-qonto:#b69cff; --c-qonto-soft:#2c2347; --c-onedrive:#3fc1b0; --c-onedrive-soft:#123631; --c-gmail:#ff9a6b; --c-gmail-soft:#42261a; --tab-fg:#0b1220;
   --ok:#52c98a; --ok-soft:#163626; --warn:#e7a948; --warn-soft:#3a2a10; --err:#ff8a7d; --err-soft:#3d1a17;
   --shade:rgba(0,0,0,.8); color-scheme:dark}
 [hidden]{display:none!important}
@@ -167,7 +170,20 @@ a.tname{color:var(--accent)}
 .tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:4px;background:var(--sunken);border-radius:12px}
 .tabs button{flex:1;border:0;background:transparent;color:var(--muted);font:inherit;font-weight:600;padding:10px 8px;border-radius:9px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px}
 .tabs button svg{width:18px;height:18px;flex:none}
-.tabs button[aria-selected="true"]{background:var(--surface);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.tabs button[data-tab]{--tc:var(--c-photos);--ts:var(--c-photos-soft);color:var(--tc)}
+.tabs button[data-tab="qonto"]{--tc:var(--c-qonto);--ts:var(--c-qonto-soft)}
+.tabs button[data-tab="onedrive"]{--tc:var(--c-onedrive);--ts:var(--c-onedrive-soft)}
+.tabs button[data-tab="gmail"]{--tc:var(--c-gmail);--ts:var(--c-gmail-soft)}
+.tabs button[data-tab]:hover{background:var(--ts)}
+.tabs button[aria-selected="true"]{background:var(--tc);color:var(--tab-fg);box-shadow:0 1px 3px rgba(0,0,0,.18)}
+.tabs button[aria-selected="true"]:hover{background:var(--tc)}
+body[data-tab="photos"]{--accent:var(--c-photos);--accent-soft:var(--c-photos-soft)}
+body[data-tab="qonto"]{--accent:var(--c-qonto);--accent-soft:var(--c-qonto-soft)}
+body[data-tab="onedrive"]{--accent:var(--c-onedrive);--accent-soft:var(--c-onedrive-soft)}
+body[data-tab="gmail"]{--accent:var(--c-gmail);--accent-soft:var(--c-gmail-soft)}
+body[data-tab] .btn.primary{color:var(--tab-fg)}
+body[data-tab] .inbox,body[data-tab] .dest{border-top:4px solid var(--accent)}
+body[data-tab] .tabs{box-shadow:inset 0 -3px 0 var(--accent)}
 .tabs button{min-width:0}
 @media (max-width:600px){.tabs{grid-template-columns:repeat(2,1fr)}.tabs button{padding:9px 6px}}
 body:not([data-tab="photos"]) .tab-photos,body:not([data-tab="qonto"]) .tab-qonto,
