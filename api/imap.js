@@ -205,8 +205,9 @@ async function fetchInvoices(user, pass, { days = 30, skip = [], max = 8, maxByt
       const subject = decodeWords(p.headers.subject || ""), files = [], ecartes = [];
       for (const a of p.attachments.map(a => ({ ...a, name: prettyName(a.name), type: kindOf(a) })).filter(a => a.type && (a.type === "application/pdf" || (!a.inline && a.data.length > 15000)))) {
         const c = classify(a.name, subject);
-        if (c.ok) files.push({ name: a.name, type: a.type, size: a.data.length, data: a.data.toString("base64") });
-        else ecartes.push({ nom: a.name, motif: c.motif });
+        const hash = require("crypto").createHash("sha256").update(a.data).digest("hex").slice(0, 24);   // empreinte : évite de réimporter le même document reçu dans un autre mail
+        if (c.ok) files.push({ name: a.name, type: a.type, size: a.data.length, hash, data: a.data.toString("base64") });
+        else ecartes.push({ nom: a.name, motif: c.motif, hash });
       }
       messages.push({ uid: m.uid, msgid: m.msgid, subject, from: decodeWords(p.headers.from || ""), date: p.headers.date || "", attachments: files, ecartes });
     }
