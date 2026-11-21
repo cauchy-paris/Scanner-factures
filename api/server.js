@@ -1,6 +1,6 @@
 // Service de lancement : reçoit la demande de l'appli, vérifie le compte Microsoft
 // de l'utilisateur, puis déclenche la tâche planifiée Claude « Traitement des factures ».
-// Aucune dépendance : Node 18+.
+// Aucune dépendance : Node 18+. Gmail : client IMAP minimal dans imap.js (mot de passe d'application chiffré, jamais stocké en clair).
 const http = require("http");
 
 const PORT = process.env.PORT || 10000;
@@ -12,6 +12,35 @@ const RUN_WINDOW_MS = +(process.env.RUN_WINDOW_MS || 12 * 60000); // durée habi
 const QONTO_LOGIN = process.env.QONTO_LOGIN || "";
 const QONTO_SECRET_KEY = process.env.QONTO_SECRET_KEY || "";
 const QONTO_API = "https://thirdparty.qonto.com/v2";
+const imap = require("./imap.js");
+const crypto = require("crypto");
+
+/* ---------- Gmail par mot de passe d'application ----------
+   Le mot de passe n'est jamais stocké en clair : le relais le chiffre (AES-256-GCM) avec une clé qui ne quitte pas Render
+   (GMAIL_CONFIG_KEY, sinon dérivée de ROUTINE_TOKEN). L'appli ne garde que ce bloc chiffré, dans OneDrive
+   (_Automatisation/gmail_config.json), et le renvoie à chaque traitement des mails. */
+function configKey(){
+  const secret = process.env.GMAIL_CONFIG_KEY || ROUTINE_TOKEN;
+  if (!secret) { const e = new Error("Clé de chiffrement absente sur le relais (GMAIL_CONFIG_KEY ou ROUTINE_TOKEN)."); e.status = 500; throw e; }
+  return crypto.createHash("sha256").update("scanner-factures/gmail/v1:" + secret).digest();
+}
+function seal(obj){
+  const iv = crypto.randomBytes(12), c = crypto.createCipheriv("aes-256-gcm", configKey(), iv);
+  const data = Buffer.concat([c.update(JSON.stringify(obj), "utf8"), c.final()]);
+  return "v1." + Buffer.concat([iv, c.getAuthTag(), data]).toString("base64");
+}
+function unseal(blob){
+  const m = /^v1\.([A-Za-z0-9+/=]+)$/.exec(String(blob || ""));
+  if (!m) { const e = new Error("Configuration Gmail absente : ouvrez Configuration dans l'appli."); e.status = 400; throw e; }
+  try {
+    const b = Buffer.from(m[1], "base64"), d = crypto.createDecipheriv("aes-256-gcm", configKey(), b.slice(0, 12));
+    d.setAuthTag(b.slice(12, 28)); return JSON.parse(Buffer.concat([d.update(b.slice(28)), d.final()]).toString("utf8"));
+  } catch (e) { const x = new Error("Configuration Gmail illisible (clé du relais changée ?) : refaites-la dans Configuration."); x.status = 400; throw x; }
+}
+async function readJson(req, max){
+  let raw = ""; for await (const c of req) { raw += c; if (raw.length > max) { const e = new Error("Requête trop lourde."); e.status = 413; throw e; } }
+  try { return raw ? JSON.parse(raw) || {} : {}; } catch (e) { const x = new Error("Requête illisible."); x.status = 400; throw x; }
+}
 
 // Noms de fournisseurs normalisés (identiques à ceux du tableau des dépenses)
 const SUPPLIERS = [[/leroy\s*merlin/i, "LEROY MERLIN"], [/castorama/i, "CASTORAMA"], [/schmitt\s*ney/i, "SCHMITTNEY"],
@@ -146,6 +175,28 @@ http.createServer(async (req, res) => {
     try { return send(res, origin, 200, await attachToTransaction(id, Buffer.concat(chunks), type, name, url.searchParams.get("force") === "1")); }
     catch (e) { return send(res, origin, e.status === 404 ? 404 : 502, { error: e.status === 401 ? "Clé API Qonto refusée : vérifiez QONTO_LOGIN et QONTO_SECRET_KEY." : e.status === 404 ? "Opération introuvable dans Qonto." : (e.message || "Qonto injoignable.") }); }
   }
+  if (req.method === "POST" && url.pathname.startsWith("/gmail/")) {
+    if (!ALLOWED_EMAILS.length) return send(res, origin, 500, { error: "Service non configuré (ALLOWED_EMAILS)." });
+    const bad = await checkUser(req); if (bad) return send(res, origin, bad[0], { error: bad[1] });
+    try {
+      const b = await readJson(req, 20000);
+      if (url.pathname === "/gmail/config") {
+        const email = String(b.email || "").trim().toLowerCase(), password = String(b.password || "").replace(/\s+/g, "");
+        if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(email)) return send(res, origin, 400, { error: "Adresse Gmail invalide." });
+        if (password.length < 8) return send(res, origin, 400, { error: "Mot de passe d'application manquant (16 lettres données par Google)." });
+        await imap.test(email, password);
+        return send(res, origin, 200, { ok: true, email, blob: seal({ email, password }) });
+      }
+      const cfg = unseal(b.blob);
+      if (url.pathname === "/gmail/test") return send(res, origin, 200, { ...(await imap.test(cfg.email, cfg.password)), email: cfg.email });
+      if (url.pathname === "/gmail/fetch") {
+        const skip = Array.isArray(b.skip) ? b.skip.map(String).slice(-2000) : [];
+        return send(res, origin, 200, { email: cfg.email, ...(await imap.fetchInvoices(cfg.email, cfg.password, { days: +b.days || 30, skip, max: Math.min(10, +b.max || 6) })) });
+      }
+      if (url.pathname === "/gmail/label") return send(res, origin, 200, await imap.labelDone(cfg.email, cfg.password, Array.isArray(b.uids) ? b.uids : []));
+      return send(res, origin, 404, { error: "Introuvable" });
+    } catch (e) { return send(res, origin, e.status || 502, { error: e.message || "Gmail injoignable." }); }
+  }
   if (req.method !== "POST" || url.pathname !== "/run") return send(res, origin, 404, { error: "Introuvable" });
   if (!ROUTINE_ID || !ROUTINE_TOKEN || !ALLOWED_EMAILS.length) return send(res, origin, 500, { error: "Service non configuré (ROUTINE_ID, ROUTINE_TOKEN, ALLOWED_EMAILS)." });
 
@@ -168,7 +219,9 @@ http.createServer(async (req, res) => {
     const b = raw ? (JSON.parse(raw) || {}) : {};
     mode = String(b.mode || ""); report = String(b.report || "").replace(/[\r\n]+/g, " ").slice(0, 1500);
   } catch (e) { mode = ""; }
-  const text = (mode === "mail"
+  const text = (mode === "mailimap"
+    ? "Lancement manuel depuis l'appli Scanner de factures : Traitement mail (import Gmail par l'appli). L'appli vient de déposer dans « À traiter » les pièces jointes des mails non traités des 30 derniers jours (noms commençant par « Gmail - », §1 bis de la procédure) et a posé le libellé « Facture traitée » sur ces mails : traite-les comme des factures reçues par Gmail (source « Gmail »), sans passer par le connecteur Gmail. Puis le traitement habituel."
+    : mode === "mail"
     ? "Lancement manuel depuis l'appli Scanner de factures : Traitement mail. Balayer tout de suite la boîte Gmail (§1 de la procédure, recherche élargie aux 30 derniers jours, toujours sans les mails déjà marqués « Facture traitée »), puis traiter chaque facture trouvée (renommage, rangement, tableau, rapprochement Qonto) et poser le libellé « Facture traitée »."
     : mode === "qonto"
     ? "Lancement manuel depuis l'appli Scanner de factures : Importer les factures Qonto (toutes les factures électroniques fournisseurs depuis le 01/01/2026, §2 bis de la procédure, avec anti-doublon). L'appli vient de ranger les PDF dans Fournisseurs/<NOM>/<AAAA> : mets le lien « justificatif » des lignes d'après _Automatisation/efactures_classees.json. Puis le traitement habituel."

@@ -176,7 +176,7 @@ function renderAccount(){
   const a = $("account");
   a.hidden = false;
   $("accName").textContent = auth.signedIn && auth.user ? (auth.user.mail || auth.user.name) : "";
-  $("signInBtn").hidden = auth.signedIn; $("signOutBtn").hidden = !auth.signedIn;
+  $("signInBtn").hidden = auth.signedIn; $("signOutBtn").hidden = !auth.signedIn; $("cfgBtn").hidden = !auth.signedIn || !API_URL;
   $("chooseDest").disabled = !auth.signedIn;
 }
 $("signInBtn").onclick = () => signIn(false);
@@ -848,7 +848,7 @@ function eur(v){ const n = +v; return isFinite(n) && v !== "" ? n.toLocaleString
 async function refreshTracking(){
   if (!auth.signedIn || trackState.loading) return;
   const hist = loadHist();
-  loadTransfers(); trackState.loading = true; trackState.err = ""; renderTracking();
+  loadTransfers(); loadGmailCfg().catch(() => {}); trackState.loading = true; trackState.err = ""; renderTracking();
   try {
     const info = {};
     for (let i = 0; i < hist.length; i += 20) {
@@ -1293,6 +1293,117 @@ async function autoExcel(force){
   try { const t = await rebuildExpenses(force); if (t && force) showBanner(t.trim(), false); return t; }
   catch(e) { const m = "Tableau Excel : " + (e.status ? errText(e) : (e.message || String(e))); console.warn(m); showBanner(m, true); return ""; }
 }
+/* ---------- Gmail par mot de passe d'application (bouton « Configuration ») ----------
+   Le relais vérifie l'adresse et le mot de passe d'application, puis renvoie un bloc chiffré (AES-256-GCM, clé gardée sur Render).
+   L'appli range ce bloc dans _Automatisation/gmail_config.json (jamais le mot de passe en clair, rien dans le navigateur).
+   « Lancer le traitement des mails » (et chaque ouverture de l'appli, sur 3 jours) : le relais lit la boîte en IMAP,
+   l'appli dépose les pièces jointes dans « À traiter » sous le nom « Gmail - … », le relais pose le libellé « Facture traitée »,
+   puis la routine traite ces fichiers comme des factures reçues par mail. Registre anti-doublon : _Automatisation/mails_importes.json. */
+const GMAIL_CFG = "gmail_config.json", MAIL_LEDGER = "mails_importes.json";
+let gmailCfg = undefined, gmailBusy = false;
+async function autoFile(name){
+  const r = await fetch(GRAPH + "/me/drive/items/" + CFG.automationFolderId + ":/" + encodeURIComponent(name) + ":/content", { headers: { Authorization: "Bearer " + await getToken() }, cache: "no-store" });
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error("lecture de " + name + " impossible (HTTP " + r.status + ")");
+  return r.json();
+}
+async function saveAutoFile(name, obj){
+  return graph("/me/drive/items/" + CFG.automationFolderId + ":/" + encodeURIComponent(name) + ":/content", { method: "PUT", body: JSON.stringify(obj, null, 1), headers: { "Content-Type": "application/json" } });
+}
+async function loadGmailCfg(force){
+  if (gmailCfg !== undefined && !force) return gmailCfg;
+  if (!auth.signedIn || !CFG.automationFolderId) return null;
+  const c = await autoFile(GMAIL_CFG);
+  gmailCfg = c && c.blob && c.email ? c : null; renderGmailCfg(); return gmailCfg;
+}
+function renderGmailCfg(){
+  const c = gmailCfg, when = c && c.configure_le ? " (réglée le " + new Date(c.configure_le).toLocaleDateString("fr-FR") + ")" : "";
+  if ($("cfgState")) $("cfgState").textContent = c ? c.email + when : gmailCfg === undefined ? "…" : "Non configurée";
+  if ($("mailBoxCfg")) $("mailBoxCfg").textContent = c ? "Boîte lue : " + c.email : gmailCfg === null ? "Boîte Gmail non configurée : bouton « ⚙ Configuration » en haut de l'appli." : "";
+}
+async function gmailCall(path, body){
+  const token = await getToken();
+  for (let i = 0; i < 6; i++) { try { const h = await fetch(API_URL + "/health", {cache: "no-store"}); if (h.ok) break; } catch(e) {} await new Promise(r => setTimeout(r, 8000)); }
+  const r = await fetch(API_URL + path, { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+const b64Blob = (b64, type) => { const s = atob(b64), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return new Blob([u], { type }); };
+// Importe les pièces jointes des mails non traités dans « À traiter ». Renvoie null si Gmail n'est pas configuré.
+async function importGmail(msg, days){
+  if (!API_URL || !CFG.automationFolderId || gmailBusy) return null;
+  const cfg = await loadGmailCfg(); if (!cfg) return null;
+  const inbox = (CFG.defaultPath || []).map(encodeURIComponent).join("/");
+  if (!inbox) throw new Error("dossier « À traiter » non configuré");
+  gmailBusy = true;
+  const files = [], errors = [], noFile = [];
+  try {
+    for (let round = 0; round < 5; round++) {
+      const ledger = (await autoFile(MAIL_LEDGER)) || { mails: [] }; ledger.mails = ledger.mails || [];
+      if (msg) msg.textContent = "Lecture de la boîte " + cfg.email + "…";
+      const res = await gmailCall("/gmail/fetch", { blob: cfg.blob, days, skip: ledger.mails.map(m => String(m.msgid)), max: 6 });
+      if (!res.messages.length) { for (const s of res.skipped || []) errors.push("mail trop lourd ignoré (" + Math.round(s.size / 1048576) + " Mo)"); break; }
+      const done = [];
+      for (const m of res.messages) {
+        const entry = { msgid: m.msgid, uid: m.uid, de: m.from, sujet: m.subject, date: m.date, fichiers: [], importe_le: new Date().toISOString() };
+        for (const a of m.attachments) {
+          if (msg) msg.textContent = "Dépôt dans « À traiter » : " + a.name + "…";
+          const name = ("Gmail - " + a.name).replace(/[\\/:*?"<>|#%]+/g, "-").slice(0, 180);
+          try {
+            const it = await graph("/me/drive/root:/" + inbox + "/" + encodeURIComponent(name) + ":/content?@microsoft.graph.conflictBehavior=rename", { method: "PUT", body: b64Blob(a.data, a.type), headers: { "Content-Type": a.type } });
+            entry.fichiers.push({ nom: it.name, item_id: it.id }); files.push(it.name);
+          } catch(e) { entry.erreur = (entry.erreur ? entry.erreur + " ; " : "") + a.name + " : " + (e.status ? errText(e) : (e.message || e)); }
+        }
+        if (entry.erreur) { errors.push("Mail « " + (m.subject || "?") + " » : " + entry.erreur); continue; }   // réessayé au prochain passage
+        if (!m.attachments.length) { entry.note = "aucune pièce jointe PDF ou image (facture en lien ?)"; noFile.push(m.subject || m.from); }
+        done.push(entry);
+      }
+      if (done.length) {
+        try { await gmailCall("/gmail/label", { blob: cfg.blob, uids: done.map(e => e.uid) }); done.forEach(e => e.libelle = true); }
+        catch(e) { errors.push("Libellé « Facture traitée » non posé : " + (e.message || e)); }
+        const fresh = (await autoFile(MAIL_LEDGER)) || { mails: [] }; fresh.mails = (fresh.mails || []).concat(done.filter(e => !(fresh.mails || []).some(x => String(x.msgid) === String(e.msgid))));
+        await saveAutoFile(MAIL_LEDGER, fresh);
+      }
+      if (!res.more || !done.length) break;
+    }
+  } finally { gmailBusy = false; }
+  const n = files.length;
+  return { count: n, text: (n ? n + " pièce" + (n > 1 ? "s" : "") + " jointe" + (n > 1 ? "s" : "") + " de Gmail déposée" + (n > 1 ? "s" : "") + " dans « À traiter » : " + files.join(" ; ") + ". " : "Aucun nouveau mail de facture dans Gmail. ")
+    + (noFile.length ? "Mails sans pièce jointe (facture en lien ?) : " + noFile.join(" ; ") + ". " : ""), errors };
+}
+function openCfg(){
+  $("cfgModal").hidden = false; $("cfgMsg").textContent = ""; $("cfgPass").value = "";
+  loadGmailCfg(true).then(c => { if (c && !$("cfgEmail").value) $("cfgEmail").value = c.email; }).catch(e => { $("cfgState").textContent = "Lecture impossible : " + (e.message || e); });
+}
+function cfgBusy(on, text){ for (const id of ["cfgSave", "cfgTest", "cfgDel"]) $(id).disabled = on; const m = $("cfgMsg"); m.className = "hint"; if (text !== undefined) m.textContent = text; }
+$("cfgBtn").onclick = openCfg;
+$("cfgClose").onclick = () => { $("cfgModal").hidden = true; $("cfgPass").value = ""; };
+$("cfgSave").onclick = async () => {
+  const email = $("cfgEmail").value.trim(), password = $("cfgPass").value.replace(/\s+/g, "");
+  if (!email || !password) { $("cfgMsg").className = "msg"; $("cfgMsg").textContent = "Indiquez l'adresse Gmail et le mot de passe d'application."; return; }
+  cfgBusy(true, "Test de la connexion à Gmail… (jusqu'à 1 minute si le service était en veille)");
+  try {
+    const r = await gmailCall("/gmail/config", { email, password });
+    await saveAutoFile(GMAIL_CFG, { email: r.email, blob: r.blob, configure_le: new Date().toISOString(), par: auth.user ? (auth.user.mail || auth.user.name || "") : "" });
+    $("cfgPass").value = ""; gmailCfg = undefined; await loadGmailCfg(true);
+    $("cfgMsg").textContent = "Connexion réussie : " + r.email + " est enregistrée. Le bouton « Lancer le traitement des mails » lira désormais cette boîte directement.";
+  } catch(e) { $("cfgMsg").className = "msg"; $("cfgMsg").textContent = e.code === "signed_out" ? "Reconnectez-vous à Microsoft." : (e.message || String(e)); }
+  finally { cfgBusy(false); }
+};
+$("cfgTest").onclick = async () => {
+  cfgBusy(true, "Test de la connexion…");
+  try { const c = await loadGmailCfg(true); if (!c) throw new Error("Aucune boîte configurée."); const r = await gmailCall("/gmail/test", { blob: c.blob }); $("cfgMsg").textContent = "Connexion à " + r.email + " réussie."; }
+  catch(e) { $("cfgMsg").className = "msg"; $("cfgMsg").textContent = e.message || String(e); }
+  finally { cfgBusy(false); }
+};
+$("cfgDel").onclick = async () => {
+  if (!confirm("Supprimer la configuration Gmail ?\n\nLe traitement des mails repassera par le connecteur Gmail de Claude. Le mot de passe d'application reste valable chez Google : révoquez-le sur myaccount.google.com si vous ne l'utilisez plus.")) return;
+  cfgBusy(true, "Suppression…");
+  try { await saveAutoFile(GMAIL_CFG, { email: "", blob: "", supprime_le: new Date().toISOString() }); gmailCfg = null; renderGmailCfg(); $("cfgMsg").textContent = "Configuration supprimée."; }
+  catch(e) { $("cfgMsg").className = "msg"; $("cfgMsg").textContent = e.message || String(e); }
+  finally { cfgBusy(false); }
+};
 // À l'ouverture de l'appli : envoie en silence les justificatifs en attente
 async function autoQueue(){
   if (!API_URL || !CFG.automationFolderId) return;
@@ -1302,6 +1413,8 @@ async function autoQueue(){
     let res = await processQontoQueue(token, null);
     try { const d = await processDepositQueue(token, null); if (d) res = { text: (res ? res.text : "") + d.text, errors: (res ? res.errors : []).concat(d.errors) }; }
     catch(e) { res = { text: res ? res.text : "", errors: (res ? res.errors : []).concat(["Dépôt OneDrive : " + (e.message || e)]) }; }
+    try { const g = await importGmail(null, 3); if (g && (g.count || g.errors.length)) res = { text: (res ? res.text : "") + g.text, errors: (res ? res.errors : []).concat(g.errors.map(m => "Gmail : " + m)) }; }
+    catch(e) { res = { text: res ? res.text : "", errors: (res ? res.errors : []).concat(["Gmail : " + (e.message || e)]) }; }
     if (res && (res.text || res.errors.length)) showBanner((res.text + (res.errors.length ? "Erreurs : " + res.errors.join(" | ") : "")).trim(), !!res.errors.length);
   } catch(e) { console.warn("File Qonto :", e); }
   autoExcel(false);
@@ -1346,6 +1459,11 @@ async function runNow(mode){
     catch(e) { errors = errors.concat(["Factures à déposer sur OneDrive : " + (e.status ? errText(e) : (e.message || String(e)))]); }
     try { const qr = await processQontoQueue(token, msg); if (qr) { done += qr.text; errors = errors.concat(qr.errors); } }
     catch(e) { errors = errors.concat(["Justificatifs à joindre sur Qonto : " + (e.status ? errText(e) : (e.message || String(e)))]); }
+    if (mode === "mail") {
+      try { const g = await importGmail(msg, 30); if (g) { mode = "mailimap"; done += g.text; errors = errors.concat(g.errors.map(m => "Gmail : " + m)); } }
+      catch(e) { errors = errors.concat(["Lecture de Gmail par l'appli : " + (e.message || String(e)) + " (le traitement passe par le connecteur Gmail de Claude)"]); }
+      if (mode === "mailimap") refreshInbox();
+    }
     if (mode === "qonto") {
       try { const res = await importQontoPdfs(token, msg); done += res.text; errors = errors.concat(res.errors); }
       catch(e) { done += "PDF non rangés. "; errors = errors.concat([e.message || String(e)]); }
@@ -1356,7 +1474,7 @@ async function runNow(mode){
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
     msg.textContent = mode === "qonto" ? done + "Import lancé. Les factures apparaîtront ici dans quelques minutes (bouton Actualiser du suivi)."
-      : mode === "mail" ? done + "Traitement des mails lancé. Les factures trouvées apparaîtront ci-dessous d'ici quelques minutes, avec leur motif en cas de problème."
+      : /^mail/.test(mode) ? done + "Traitement des mails lancé. Les factures trouvées apparaîtront ci-dessous d'ici quelques minutes, avec leur motif en cas de problème."
       : done + "Traitement lancé. Les factures apparaîtront ci-dessous d'ici quelques minutes, avec leur motif en cas de problème.";
     store.set("scanner.lastRun", Date.now()); if (mode !== "qonto") { refreshInbox(); refreshTracking(); for (const t of [180000, 360000, 600000]) setTimeout(async () => { try { await processDepositQueue(await getToken(), null); } catch(e) {} await autoExcel(false); refreshInbox(); refreshTracking(); }, t); }
   } catch(e) { if (mode === "qonto") showErrors([].concat($("qontoErrors") && $("qontoErrors").dataset.list ? JSON.parse($("qontoErrors").dataset.list) : [], ["Lancement du traitement : " + (e.message || e)])); msg.className = "msg"; msg.textContent = "Lancement impossible : " + (e.code === "signed_out" ? "reconnectez-vous." : e instanceof TypeError ? "le service de lancement ne répond pas (" + API_URL + "). Réessayez dans une minute." : e.message); }
