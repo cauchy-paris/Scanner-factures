@@ -1354,6 +1354,10 @@ async function importGmail(msg, days){
   const cfg = await loadGmailCfg(); if (!cfg) return null;
   const inbox = (CFG.defaultPath || []).map(encodeURIComponent).join("/");
   if (!inbox) throw new Error("dossier « À traiter » non configuré");
+  // Un seul import à la fois, même entre appareils (téléphone + PC) : marque « en_cours » dans le registre
+  const lock0 = (await autoFile(MAIL_LEDGER)) || { mails: [] };
+  if (lock0.en_cours && Date.now() - Date.parse(lock0.en_cours) < 4 * 60000) return { count: 0, text: "Import Gmail déjà en cours sur un autre appareil : rien de plus à faire. ", errors: [] };
+  lock0.mails = lock0.mails || []; lock0.en_cours = new Date().toISOString(); await saveAutoFile(MAIL_LEDGER, lock0);
   gmailBusy = true;
   const files = [], errors = [], noFile = [], dropped = [];
   try {
@@ -1362,8 +1366,11 @@ async function importGmail(msg, days){
       if (msg) msg.textContent = "Lecture de la boîte " + cfg.email + "…";
       const res = await gmailCall("/gmail/fetch", { blob: cfg.blob, days, skip: ledger.mails.map(m => String(m.msgid)), max: 6 });
       if (!res.messages.length) { for (const s of res.skipped || []) errors.push("mail trop lourd ignoré (" + Math.round(s.size / 1048576) + " Mo)"); break; }
-      const done = [], known = knownDocs(ledger);
+      const done = [];
       for (const m of res.messages) {
+        const cur = (await autoFile(MAIL_LEDGER)) || { mails: [] };   // relu avant chaque mail : un autre import a pu le traiter entre-temps
+        if ((cur.mails || []).some(x => String(x.msgid) === String(m.msgid))) continue;
+        const known = knownDocs(cur); for (const e of done) for (const f of [].concat(e.fichiers, e.deja || [])) { if (f.hash) known.set(f.hash, "même import"); if (docKey(f.nom)) known.set(docKey(f.nom), "même import"); }
         const entry = { msgid: m.msgid, uid: m.uid, de: m.from, sujet: m.subject, date: m.date, fichiers: [], importe_le: new Date().toISOString() };
         for (const a of m.attachments) {
           const prev = (a.hash && known.get(a.hash)) || (docKey(a.name) && known.get(docKey(a.name)));
@@ -1382,17 +1389,24 @@ async function importGmail(msg, days){
         if ((m.ecartes || []).length) { entry.ecartes = m.ecartes; m.ecartes.forEach(x => dropped.push(x.nom + " (" + x.motif + ")")); }
         if (!m.attachments.length) { entry.note = entry.ecartes ? "aucune facture parmi les pièces jointes (écartées, rien déposé)" : "aucune pièce jointe PDF ou image (facture en lien ?)"; if (!entry.ecartes) noFile.push(m.subject || m.from); }
         done.push(entry);
+        const fresh = (await autoFile(MAIL_LEDGER)) || { mails: [] }; fresh.mails = fresh.mails || [];   // enregistré tout de suite, mail par mail
+        if (!fresh.mails.some(x => String(x.msgid) === String(entry.msgid))) { fresh.mails.push(entry); fresh.en_cours = new Date().toISOString(); await saveAutoFile(MAIL_LEDGER, fresh); }
       }
       if (done.length) {
         const toLabel = done.filter(e => e.fichiers.length || (e.deja || []).length);   // « Facture traitée » seulement si une facture a été déposée
-        if (toLabel.length) try { await gmailCall("/gmail/label", { blob: cfg.blob, uids: toLabel.map(e => e.uid) }); toLabel.forEach(e => e.libelle = true); }
-        catch(e) { errors.push("Libellé « Facture traitée » non posé : " + (e.message || e)); }
-        const fresh = (await autoFile(MAIL_LEDGER)) || { mails: [] }; fresh.mails = (fresh.mails || []).concat(done.filter(e => !(fresh.mails || []).some(x => String(x.msgid) === String(e.msgid))));
-        await saveAutoFile(MAIL_LEDGER, fresh);
+        if (toLabel.length) try {
+          await gmailCall("/gmail/label", { blob: cfg.blob, uids: toLabel.map(e => e.uid) });
+          const fresh = (await autoFile(MAIL_LEDGER)) || { mails: [] };
+          for (const x of fresh.mails || []) if (toLabel.some(e => String(e.msgid) === String(x.msgid))) x.libelle = true;
+          await saveAutoFile(MAIL_LEDGER, fresh);
+        } catch(e) { errors.push("Libellé « Facture traitée » non posé : " + (e.message || e)); }
       }
       if (!res.more || !done.length) break;
     }
-  } finally { gmailBusy = false; }
+  } finally {
+    gmailBusy = false;
+    try { const fresh = (await autoFile(MAIL_LEDGER)) || { mails: [] }; delete fresh.en_cours; await saveAutoFile(MAIL_LEDGER, fresh); } catch(e) {}
+  }
   const n = files.length;
   return { count: n, text: (n ? n + " pièce" + (n > 1 ? "s" : "") + " jointe" + (n > 1 ? "s" : "") + " de Gmail déposée" + (n > 1 ? "s" : "") + " dans « À traiter » : " + files.join(" ; ") + ". " : "Aucun nouveau mail de facture dans Gmail. ")
     + (noFile.length ? "Mails sans pièce jointe (facture en lien ?) : " + noFile.join(" ; ") + ". " : "")
