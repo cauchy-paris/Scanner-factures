@@ -1331,6 +1331,24 @@ async function gmailCall(path, body){
 }
 const b64Blob = (b64, type) => { const s = atob(b64), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return new Blob([u], { type }); };
 // Importe les pièces jointes des mails non traités dans « À traiter ». Renvoie null si Gmail n'est pas configuré.
+// Clé d'un document reçu par mail : nom sans préfixe « Gmail - », sans horodatage d'envoi ni « duplicata »
+// (ex. F_2487593_20260127_20261023174319293885_duplicata.pdf et …_20261109172238286814_duplicata.pdf → « f 2487593 20260127 »)
+function docKey(name){
+  const k = String(name || "").replace(/^Gmail - /, "").replace(/\.[a-z0-9]{2,4}$/i, "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    .replace(/[_\-.\s]+/g, " ").replace(/\b\d{12,}\b/g, " ").replace(/\b(duplicata|copie|copy)\b/g, " ").replace(/\(\d+\)/g, " ").replace(/\s+/g, " ").trim();
+  return /\d{3,}/.test(k) ? k : "";   // nom générique (« facture.pdf ») : pas de clé, seule l'empreinte compte
+}
+function knownDocs(ledger){
+  const k = new Map();
+  for (const m of ledger.mails || []) {
+    const from = "mail du " + String(m.date || "?").slice(0, 16);
+    for (const f of [].concat(m.fichiers || [], m.ecartes || [], m.deja || [])) {
+      if (f.hash) k.set(f.hash, from);
+      const key = docKey(f.nom); if (key) k.set(key, from);
+    }
+  }
+  return k;
+}
 async function importGmail(msg, days){
   if (!API_URL || !CFG.automationFolderId || gmailBusy) return null;
   const cfg = await loadGmailCfg(); if (!cfg) return null;
@@ -1344,15 +1362,20 @@ async function importGmail(msg, days){
       if (msg) msg.textContent = "Lecture de la boîte " + cfg.email + "…";
       const res = await gmailCall("/gmail/fetch", { blob: cfg.blob, days, skip: ledger.mails.map(m => String(m.msgid)), max: 6 });
       if (!res.messages.length) { for (const s of res.skipped || []) errors.push("mail trop lourd ignoré (" + Math.round(s.size / 1048576) + " Mo)"); break; }
-      const done = [];
+      const done = [], known = knownDocs(ledger);
       for (const m of res.messages) {
         const entry = { msgid: m.msgid, uid: m.uid, de: m.from, sujet: m.subject, date: m.date, fichiers: [], importe_le: new Date().toISOString() };
         for (const a of m.attachments) {
+          const prev = (a.hash && known.get(a.hash)) || (docKey(a.name) && known.get(docKey(a.name)));
+          if (prev) {   // même document déjà reçu dans un autre mail (ex. duplicata joint à chaque « situation de compte ») : ne pas le redéposer
+            (entry.deja = entry.deja || []).push({ nom: a.name, hash: a.hash, motif: "déjà importé (" + prev + ")" }); dropped.push(a.name + " (déjà importé)"); continue;
+          }
+          if (a.hash) known.set(a.hash, "mail du " + (m.date || "?").slice(0, 16)); if (docKey(a.name)) known.set(docKey(a.name), "mail du " + (m.date || "?").slice(0, 16));
           if (msg) msg.textContent = "Dépôt dans « À traiter » : " + a.name + "…";
           const name = ("Gmail - " + a.name).replace(/[\\/:*?"<>|#%]+/g, "-").slice(0, 180);
           try {
             const it = await graph("/me/drive/root:/" + inbox + "/" + encodeURIComponent(name) + ":/content?@microsoft.graph.conflictBehavior=rename", { method: "PUT", body: b64Blob(a.data, a.type), headers: { "Content-Type": a.type } });
-            entry.fichiers.push({ nom: it.name, item_id: it.id }); files.push(it.name);
+            entry.fichiers.push({ nom: it.name, item_id: it.id, hash: a.hash }); files.push(it.name);
           } catch(e) { entry.erreur = (entry.erreur ? entry.erreur + " ; " : "") + a.name + " : " + (e.status ? errText(e) : (e.message || e)); }
         }
         if (entry.erreur) { errors.push("Mail « " + (m.subject || "?") + " » : " + entry.erreur); continue; }   // réessayé au prochain passage
@@ -1361,7 +1384,7 @@ async function importGmail(msg, days){
         done.push(entry);
       }
       if (done.length) {
-        const toLabel = done.filter(e => e.fichiers.length);   // « Facture traitée » seulement si une facture a été déposée
+        const toLabel = done.filter(e => e.fichiers.length || (e.deja || []).length);   // « Facture traitée » seulement si une facture a été déposée
         if (toLabel.length) try { await gmailCall("/gmail/label", { blob: cfg.blob, uids: toLabel.map(e => e.uid) }); toLabel.forEach(e => e.libelle = true); }
         catch(e) { errors.push("Libellé « Facture traitée » non posé : " + (e.message || e)); }
         const fresh = (await autoFile(MAIL_LEDGER)) || { mails: [] }; fresh.mails = (fresh.mails || []).concat(done.filter(e => !(fresh.mails || []).some(x => String(x.msgid) === String(e.msgid))));
@@ -1373,7 +1396,7 @@ async function importGmail(msg, days){
   const n = files.length;
   return { count: n, text: (n ? n + " pièce" + (n > 1 ? "s" : "") + " jointe" + (n > 1 ? "s" : "") + " de Gmail déposée" + (n > 1 ? "s" : "") + " dans « À traiter » : " + files.join(" ; ") + ". " : "Aucun nouveau mail de facture dans Gmail. ")
     + (noFile.length ? "Mails sans pièce jointe (facture en lien ?) : " + noFile.join(" ; ") + ". " : "")
-    + (dropped.length ? dropped.length + " pièce" + (dropped.length > 1 ? "s" : "") + " jointe" + (dropped.length > 1 ? "s" : "") + " écartée" + (dropped.length > 1 ? "s" : "") + " car ce ne sont pas des factures : " + dropped.join(" ; ") + ". " : ""), errors };
+    + (dropped.length ? dropped.length + " pièce" + (dropped.length > 1 ? "s" : "") + " jointe" + (dropped.length > 1 ? "s" : "") + " écartée" + (dropped.length > 1 ? "s" : "") + " (pas une facture, ou déjà importée) : " + dropped.join(" ; ") + ". " : ""), errors };
 }
 function openCfg(){
   $("cfgModal").hidden = false; $("cfgMsg").textContent = ""; $("cfgPass").value = "";
