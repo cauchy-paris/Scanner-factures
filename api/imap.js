@@ -161,7 +161,36 @@ async function session(user, pass, fn, opts){
   const c = new Imap(user, pass, opts); await c.connect();
   try { await c.login(); return await fn(c); } finally { await c.logout(); }
 }
-const QUERY = d => 'has:attachment -from:me -label:"' + LABEL + '" newer_than:' + d + "d (facture OR invoice OR receipt OR reçu OR ticket OR avoir OR note)";
+/* ---------- Tri strict : ne garder que les factures ----------
+   Une pièce jointe est retenue seulement si rien n'indique un autre document (CGV, publicité, garantie,
+   relevé, devis…) ET si son nom ou l'objet du mail indique une facture. Le reste est « écarté » avec un motif. */
+function plain(s){ return String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[_\-.+]+/g, " ").replace(/\s+/g, " "); }
+function prettyName(n){
+  if (!/%[0-9A-Fa-f]{2}/.test(n)) return n;
+  try { return decodeURIComponent(n); } catch(e) { return n.replace(/%([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16))); }
+}
+const NOT_INVOICE = [
+  [/conditions? (generales?|particulieres?|de vente|d utilisation)|\bc ?g ?[vua]\b/, "conditions générales"],
+  [/retractation/, "formulaire de rétractation"], [/garantie/, "garantie"], [/mentions? legales?|rgpd|confidentialite|cookies?/, "mentions légales"],
+  [/fiche (informative|technique|produit)|brochure|catalogue|plaquette|newsletter|lettre d info|actualites?|publicite|promo(tion)?s?\b|offres?\b|flyer|invitation|webinaire/, "information ou publicité"],
+  [/notice|guide|mode d emploi|tutoriel|presentation/, "notice ou guide"], [/tarifs?\b|grille tarifaire|devis|proposition commerciale/, "devis ou tarif"],
+  [/bon de (commande|livraison)|confirmation de commande|accuse de reception|bordereau/, "bon de commande ou de livraison"],
+  [/releve|situation de compte|echeancier|lettre de relance|relance/, "relevé ou relance"],
+  [/contrat|avenant|attestation|kbis|\brib\b|\biban\b|statuts|proces verbal|\bcv\b/, "document administratif"],
+];
+const INVOICE_NAME = /factur|invoice|\bavoir|credit note|receipt|\brecu\b|ticket|quittance|note (de frais|d honoraires)|duplicata|(^|\s)(f|fa|fac|fct|inv|in)\s?\d{3,}/;
+const INVOICE_SUBJECT = /factur|invoice|\bavoir|receipt|\brecu\b|ticket de caisse|quittance|note d honoraires|justificatif de paiement/;
+function classify(name, subject){
+  const n = plain(name), s = plain(subject);
+  for (const [re, why] of NOT_INVOICE) if (re.test(n)) return { ok: false, motif: "pas une facture (" + why + ")" };
+  if (INVOICE_NAME.test(n)) return { ok: true };
+  if (INVOICE_SUBJECT.test(s)) {
+    for (const [re, why] of NOT_INVOICE) if (re.test(s)) return { ok: false, motif: "mail « " + why + " » sans pièce nommée facture" };
+    return { ok: true };
+  }
+  return { ok: false, motif: "aucun indice de facture dans le nom du fichier ni l'objet du mail" };
+}
+const QUERY = d => 'has:attachment -from:me -label:"' + LABEL + '" newer_than:' + d + "d (facture OR invoice OR receipt OR reçu OR avoir OR quittance OR \"ticket de caisse\" OR \"note d'honoraires\")";
 // Messages non traités, avec leurs pièces jointes utiles (PDF, et images hors logos de signature)
 async function fetchInvoices(user, pass, { days = 30, skip = [], max = 8, maxBytes = 20 * 1024 * 1024 } = {}, opts){
   return session(user, pass, async c => {
@@ -173,9 +202,13 @@ async function fetchInvoices(user, pass, { days = 30, skip = [], max = 8, maxByt
       if (messages.length >= max) break;
       if (m.size > maxBytes || total + m.size > 30 * 1024 * 1024) { skipped.push({ msgid: m.msgid, uid: m.uid, size: m.size }); continue; }
       const p = parseMessage(await c.fetchRaw(m.uid)); total += m.size;
-      const files = p.attachments.map(a => ({ ...a, type: kindOf(a) })).filter(a => a.type && (a.type === "application/pdf" || (!a.inline && a.data.length > 15000)))
-        .map(a => ({ name: a.name, type: a.type, size: a.data.length, data: a.data.toString("base64") }));
-      messages.push({ uid: m.uid, msgid: m.msgid, subject: decodeWords(p.headers.subject || ""), from: decodeWords(p.headers.from || ""), date: p.headers.date || "", attachments: files });
+      const subject = decodeWords(p.headers.subject || ""), files = [], ecartes = [];
+      for (const a of p.attachments.map(a => ({ ...a, name: prettyName(a.name), type: kindOf(a) })).filter(a => a.type && (a.type === "application/pdf" || (!a.inline && a.data.length > 15000)))) {
+        const c = classify(a.name, subject);
+        if (c.ok) files.push({ name: a.name, type: a.type, size: a.data.length, data: a.data.toString("base64") });
+        else ecartes.push({ nom: a.name, motif: c.motif });
+      }
+      messages.push({ uid: m.uid, msgid: m.msgid, subject, from: decodeWords(p.headers.from || ""), date: p.headers.date || "", attachments: files, ecartes });
     }
     return { messages, more: info.length > messages.length + skipped.length, skipped, found: info.length };
   }, opts);
@@ -183,4 +216,4 @@ async function fetchInvoices(user, pass, { days = 30, skip = [], max = 8, maxByt
 async function labelDone(user, pass, uids, opts){ return session(user, pass, async c => { await c.selectAll(); await c.label(uids.map(Number).filter(n => n > 0)); return { ok: true }; }, opts); }
 async function test(user, pass, opts){ return session(user, pass, async c => { const box = await c.selectAll(); return { ok: true, box }; }, opts); }
 
-module.exports = { fetchInvoices, labelDone, test, parseMessage, utf7, Imap, QUERY };
+module.exports = { fetchInvoices, labelDone, test, parseMessage, utf7, Imap, QUERY, classify, prettyName };

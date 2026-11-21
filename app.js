@@ -1337,7 +1337,7 @@ async function importGmail(msg, days){
   const inbox = (CFG.defaultPath || []).map(encodeURIComponent).join("/");
   if (!inbox) throw new Error("dossier « À traiter » non configuré");
   gmailBusy = true;
-  const files = [], errors = [], noFile = [];
+  const files = [], errors = [], noFile = [], dropped = [];
   try {
     for (let round = 0; round < 5; round++) {
       const ledger = (await autoFile(MAIL_LEDGER)) || { mails: [] }; ledger.mails = ledger.mails || [];
@@ -1356,11 +1356,13 @@ async function importGmail(msg, days){
           } catch(e) { entry.erreur = (entry.erreur ? entry.erreur + " ; " : "") + a.name + " : " + (e.status ? errText(e) : (e.message || e)); }
         }
         if (entry.erreur) { errors.push("Mail « " + (m.subject || "?") + " » : " + entry.erreur); continue; }   // réessayé au prochain passage
-        if (!m.attachments.length) { entry.note = "aucune pièce jointe PDF ou image (facture en lien ?)"; noFile.push(m.subject || m.from); }
+        if ((m.ecartes || []).length) { entry.ecartes = m.ecartes; m.ecartes.forEach(x => dropped.push(x.nom + " (" + x.motif + ")")); }
+        if (!m.attachments.length) { entry.note = entry.ecartes ? "aucune facture parmi les pièces jointes (écartées, rien déposé)" : "aucune pièce jointe PDF ou image (facture en lien ?)"; if (!entry.ecartes) noFile.push(m.subject || m.from); }
         done.push(entry);
       }
       if (done.length) {
-        try { await gmailCall("/gmail/label", { blob: cfg.blob, uids: done.map(e => e.uid) }); done.forEach(e => e.libelle = true); }
+        const toLabel = done.filter(e => e.fichiers.length);   // « Facture traitée » seulement si une facture a été déposée
+        if (toLabel.length) try { await gmailCall("/gmail/label", { blob: cfg.blob, uids: toLabel.map(e => e.uid) }); toLabel.forEach(e => e.libelle = true); }
         catch(e) { errors.push("Libellé « Facture traitée » non posé : " + (e.message || e)); }
         const fresh = (await autoFile(MAIL_LEDGER)) || { mails: [] }; fresh.mails = (fresh.mails || []).concat(done.filter(e => !(fresh.mails || []).some(x => String(x.msgid) === String(e.msgid))));
         await saveAutoFile(MAIL_LEDGER, fresh);
@@ -1370,7 +1372,8 @@ async function importGmail(msg, days){
   } finally { gmailBusy = false; }
   const n = files.length;
   return { count: n, text: (n ? n + " pièce" + (n > 1 ? "s" : "") + " jointe" + (n > 1 ? "s" : "") + " de Gmail déposée" + (n > 1 ? "s" : "") + " dans « À traiter » : " + files.join(" ; ") + ". " : "Aucun nouveau mail de facture dans Gmail. ")
-    + (noFile.length ? "Mails sans pièce jointe (facture en lien ?) : " + noFile.join(" ; ") + ". " : ""), errors };
+    + (noFile.length ? "Mails sans pièce jointe (facture en lien ?) : " + noFile.join(" ; ") + ". " : "")
+    + (dropped.length ? dropped.length + " pièce" + (dropped.length > 1 ? "s" : "") + " jointe" + (dropped.length > 1 ? "s" : "") + " écartée" + (dropped.length > 1 ? "s" : "") + " car ce ne sont pas des factures : " + dropped.join(" ; ") + ". " : ""), errors };
 }
 function openCfg(){
   $("cfgModal").hidden = false; $("cfgMsg").textContent = ""; $("cfgPass").value = "";
