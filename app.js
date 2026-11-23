@@ -58,6 +58,25 @@ function signOut(){
   store.del("scanner.tok"); store.del("scanner.user"); auth.tok = null; auth.user = null; dest = null;
   location.assign(AUTHORITY + "/oauth2/v2.0/logout?post_logout_redirect_uri=" + encodeURIComponent(REDIRECT_URI));
 }
+/* Réseau mobile : une coupure brève (changement d'antenne, appli mise en arrière-plan, relais Render qui redémarre et répond
+   sans en-têtes CORS) donne « Failed to fetch ». Les requêtes sans effet de bord en cas de répétition (GET, HEAD, PUT, DELETE)
+   sont réessayées automatiquement 3 fois (2 s, 6 s, 15 s) avant de remonter l'erreur. */
+const netFetch = window.fetch.bind(window);
+window.fetch = async function(input, init){
+  const method = String((init && init.method) || (input && input.method) || "GET").toUpperCase();
+  const retry = ["GET", "HEAD", "PUT", "DELETE"].includes(method);
+  const waits = [2000, 6000, 15000];
+  for (let i = 0; ; i++) {
+    try { return await netFetch(input, init); }
+    catch(e) {
+      if (!retry || !(e instanceof TypeError) || i >= waits.length || (init && init.signal && init.signal.aborted)) {
+        if (e instanceof TypeError && !/connexion/.test(e.message)) e.message = "connexion interrompue (" + e.message + ")";
+        throw e;
+      }
+      await new Promise(r => setTimeout(r, waits[i]));
+    }
+  }
+};
 async function tokenRequest(params){
   const r = await fetch(AUTHORITY + "/oauth2/v2.0/token", { method: "POST",
     headers: {"Content-Type": "application/x-www-form-urlencoded"},
@@ -87,7 +106,10 @@ async function getToken(){
   if (!auth.tok) throw Object.assign(new Error("Non connecté"), {code: "signed_out"});
   if (auth.tok.access && auth.tok.exp > Date.now() + 90000) return auth.tok.access;
   if (!refreshing) refreshing = tokenRequest({ grant_type: "refresh_token", refresh_token: auth.tok.refresh })
-    .catch(e => { store.del("scanner.tok"); auth.tok = null; throw Object.assign(new Error("Session expirée"), {code: "signed_out"}); })
+    .catch(e => {
+      if (e instanceof TypeError) throw e;   // coupure réseau : on garde la session, la prochaine tentative la renouvellera
+      store.del("scanner.tok"); auth.tok = null; throw Object.assign(new Error("Session expirée"), {code: "signed_out"});
+    })
     .finally(() => { refreshing = null; });
   return refreshing;
 }
@@ -1291,7 +1313,13 @@ async function rebuildExpenses(force){
 }
 async function autoExcel(force){
   try { const t = await rebuildExpenses(force); if (t && force) showBanner(t.trim(), false); return t; }
-  catch(e) { const m = "Tableau Excel : " + (e.status ? errText(e) : (e.message || String(e))); console.warn(m); showBanner(m, true); return ""; }
+  catch(e) {
+    if (e instanceof TypeError && !force) {   // coupure réseau : nouvel essai discret dans 2 minutes, sans bandeau rouge
+      console.warn("Tableau Excel : " + e.message); clearTimeout(autoExcel.t); autoExcel.t = setTimeout(() => autoExcel(false), 120000); return "";
+    }
+    const m = "Tableau Excel : " + (e.status ? errText(e) : e instanceof TypeError ? "connexion interrompue pendant la mise à jour, réessayez avec « Mettre à jour l'Excel »." : (e.message || String(e)));
+    console.warn(m); showBanner(m, true); return "";
+  }
 }
 /* ---------- Gmail par mot de passe d'application (bouton « Configuration ») ----------
    Le relais vérifie l'adresse et le mot de passe d'application, puis renvoie un bloc chiffré (AES-256-GCM, clé gardée sur Render).
