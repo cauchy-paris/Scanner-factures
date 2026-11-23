@@ -1473,9 +1473,9 @@ function showErrors(list){
   store.set("scanner.qontoErrors", { at: Date.now(), list });
 }
 
-async function runNow(mode){
+async function runNow(mode, ui){
   mode = mode === "qonto" || mode === "mail" ? mode : "";
-  const btn = $(mode === "qonto" ? "qontoImport" : mode === "mail" ? "runMail" : "runNow"), msg = $(mode === "qonto" ? "qontoMsg" : mode === "mail" ? "mailMsg" : "runMsg");
+  const btn = $(ui ? ui.btn : mode === "qonto" ? "qontoImport" : mode === "mail" ? "runMail" : "runNow"), msg = $(ui ? ui.msg : mode === "qonto" ? "qontoMsg" : mode === "mail" ? "mailMsg" : "runMsg");
   if (!API_URL) { msg.textContent = "Le service de lancement n'est pas encore configuré."; return; }
   btn.disabled = true; msg.className = "hint"; msg.textContent = "Lancement… (jusqu'à 1 minute si le service était en veille)";
   try {
@@ -1522,6 +1522,7 @@ async function runNow(mode){
 }
 $("runNow").onclick = () => runNow();
 $("runMail").onclick = () => runNow("mail");
+$("runPhotos").onclick = () => runNow("", { btn: "runPhotos", msg: "runMsgPhotos" });   // même lancement que « Lancer le traitement OneDrive »
 
 /* ---------- Dossier « À traiter » : nombre de fichiers en attente ---------- */
 async function trackInbox(){
@@ -1545,7 +1546,7 @@ async function refreshInbox(){
     const n = (list.value || []).filter(f => f.file).length;
     out.textContent = n ? n + " fichier" + (n > 1 ? "s" : "") + " en attente de traitement" : "Aucun fichier en attente";
   } catch(e) { out.textContent = "Contenu indisponible (" + (e.status ? errText(e) : (e.message || String(e))) + ")"; }
-  finally { inboxBusy = false; $("inboxRefresh").disabled = false; }
+  finally { inboxBusy = false; $("inboxRefresh").disabled = false; const p = $("inboxCountPhotos"); if (p) p.textContent = out.textContent; }
 }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && auth.signedIn) { refreshInbox(); autoExcel(false); } });
 $("qontoImport").onclick = () => runNow("qonto");
