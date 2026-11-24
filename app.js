@@ -1509,8 +1509,8 @@ function showErrors(list){
 const ymd = d => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
 const frDay = s => s.split("-").reverse().join("/");
 const PERIODS = {
-  qonto: [["today", "Aujourd'hui"], ["3d", "3 derniers jours"], ["week", "7 derniers jours"], ["month", "30 derniers jours"], ["year", "Depuis janvier"], ["custom", "Du… au…"]],
-  mail:  [["today", "Aujourd'hui"], ["3d", "3 derniers jours"], ["week", "7 derniers jours"], ["month", "30 derniers jours"], ["custom", "Du… au…"]]
+  qonto: [["today", "Aujourd'hui"], ["3d", "3 derniers jours"], ["week", "Semaine en cours"], ["month", "Mois en cours"], ["year", "Depuis janvier"], ["custom", "Du… au…"]],
+  mail:  [["today", "Aujourd'hui"], ["3d", "3 derniers jours"], ["week", "Semaine en cours"], ["month", "Mois en cours"], ["custom", "Du… au…"]]
 };
 const PERIOD_DEFAULT = { qonto: "year", mail: "month" };
 function periodOf(kind){
@@ -1521,13 +1521,13 @@ function periodOf(kind){
   let from, to = ymd(today);
   if (key === "today") from = to;
   else if (key === "3d") from = back(2);
-  else if (key === "week") from = back(6);
-  else if (key === "month") from = back(29);
+  else if (key === "week") from = back((today.getDay() + 6) % 7);   // depuis lundi
+  else if (key === "month") from = ymd(new Date(today.getFullYear(), today.getMonth(), 1));
   else if (key === "year") from = today.getFullYear() + "-01-01";
   else { from = st.from || back(6); to = st.to || to; if (from > to) [from, to] = [to, from]; }
   const midnight = s => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
   const end = midnight(to); end.setDate(end.getDate() + 1);
-  const label = key === "today" ? "aujourd'hui (" + frDay(from) + ")" : key === "year" ? "depuis le " + frDay(from) : from === to ? "le " + frDay(from) : "du " + frDay(from) + " au " + frDay(to);
+  const label = key === "today" ? "aujourd'hui (" + frDay(from) + ")" : key === "week" ? "la semaine en cours, du " + frDay(from) + " au " + frDay(to) : key === "month" ? "le mois en cours, du " + frDay(from) + " au " + frDay(to) : key === "year" ? "depuis le " + frDay(from) : from === to ? "le " + frDay(from) : "du " + frDay(from) + " au " + frDay(to);
   return { key, from, to, after: Math.floor(midnight(from) / 1000), before: Math.floor(end / 1000), label };
 }
 function setupPeriod(kind, boxId){
