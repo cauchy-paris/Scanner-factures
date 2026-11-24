@@ -145,6 +145,13 @@ button:focus-visible,input:focus-visible,label.btn:focus-within{outline:2px soli
 .stage svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .ed-bot .grow{flex:1}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.period{display:flex;flex-direction:column;gap:6px;width:100%}
+.period .plabel{font-size:12.5px;color:var(--muted);font-weight:600}
+.period .pchips{display:flex;flex-wrap:wrap;gap:6px}
+.period .pchips button{border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:999px;padding:6px 12px;font-size:13px;min-height:36px;cursor:pointer}
+.period .pchips button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-fg);font-weight:600}
+.period .prange{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px}
+.period .prange input{border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:8px;padding:6px 8px;font-size:14px;min-height:36px}
 .seg button{border:0;background:var(--surface);color:var(--fg);padding:8px 12px;font-size:13px;min-height:40px}
 .seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg)}
 .dropcover{position:fixed;inset:0;z-index:40;background:var(--shade);display:flex;align-items:center;justify-content:center;color:#fff;font-size:18px;font-weight:600;pointer-events:none}
@@ -275,11 +282,20 @@ body:not([data-tab="onedrive"]) .tab-onedrive,body:not([data-tab="gmail"]) .tab-
         <div class="label" id="mailTitle">Factures reçues par mail (Gmail)</div>
         <div class="hint" id="mailBoxCfg"></div>
       </div>
+      <div class="period" id="mailPeriod" role="group" aria-label="Période à traiter">
+        <div class="plabel">Période à traiter</div>
+        <div class="pchips"></div>
+        <div class="prange" hidden>
+          <label>Du <input type="date" data-k="from"></label>
+          <label>au <input type="date" data-k="to"></label>
+        </div>
+        <div class="hint" data-k="info"></div>
+      </div>
       <button class="btn primary bigrun" id="runMail" type="button">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 4.5v15l12-7.5z"/></svg>
         Lancer le traitement des mails
       </button>
-      <div class="hint" id="mailMsg">Balaye tout de suite la boîte Gmail des factures : chaque facture pas encore marquée « Facture traitée » est renommée, rangée dans Achat, ajoutée au tableau et rapprochée sur Qonto, puis le mail reçoit le libellé « Facture traitée ».</div>
+      <div class="hint" id="mailMsg">Balaye tout de suite la boîte Gmail pendant la période choisie : chaque facture pas encore marquée « Facture traitée » est renommée, rangée dans Achat, ajoutée au tableau et rapprochée sur Qonto, puis le mail reçoit le libellé « Facture traitée ».</div>
     </div>
     <div class="qhead">
       <div class="label">Factures traitées par mail (30 derniers jours)</div>
@@ -337,11 +353,20 @@ body:not([data-tab="onedrive"]) .tab-onedrive,body:not([data-tab="gmail"]) .tab-
       <div class="label" id="qontoTitle">Factures reçues sur Qonto</div>
     </div>
     <div class="runbox">
+      <div class="period" id="qontoPeriod" role="group" aria-label="Période à traiter">
+        <div class="plabel">Période à traiter</div>
+        <div class="pchips"></div>
+        <div class="prange" hidden>
+          <label>Du <input type="date" data-k="from"></label>
+          <label>au <input type="date" data-k="to"></label>
+        </div>
+        <div class="hint" data-k="info"></div>
+      </div>
       <button class="btn" id="qontoImport" type="button">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 19h14"/></svg>
         Importer
       </button>
-      <div class="hint" id="qontoMsg">Récupère les factures électroniques déposées par les fournisseurs sur Qonto depuis janvier 2026 et les ajoute au tableau, sans doublon. Vérifié aussi chaque matin à 7 h 38 (7 derniers jours).</div>
+      <div class="hint" id="qontoMsg">Récupère les factures électroniques déposées par les fournisseurs sur Qonto pendant la période choisie et les ajoute au tableau, sans doublon. Vérifié aussi chaque matin à 7 h 38 (7 derniers jours).</div>
     </div>
     <div class="errbox" id="qontoErrors" hidden></div>
     <div class="hint" id="qontoInfo"></div>
