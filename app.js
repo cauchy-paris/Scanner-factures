@@ -1117,9 +1117,11 @@ async function relay(path, token){
   if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || ("HTTP " + r.status)); }
   return r;
 }
-async function importQontoPdfs(token, msg){
+async function importQontoPdfs(token, msg, period){
   if (!CFG.suppliersFolderId || !CFG.automationFolderId) return "";
-  const inv = (await (await relay("/qonto/einvoices", token)).json()).invoices || [];
+  // période choisie : date de la facture (repli sur la date de dépôt sur Qonto)
+  const inPeriod = f => !period || [f.date, f.received].some(d => d && d >= period.from && d <= period.to);
+  const inv = ((await (await relay("/qonto/einvoices", token)).json()).invoices || []).filter(inPeriod);
   // registre des factures déjà rangées (par id Qonto)
   let ledger = { invoices: {} };
   try {
@@ -1146,7 +1148,7 @@ async function importQontoPdfs(token, msg){
   }
   if (added || kept) await graph("/me/drive/items/" + CFG.automationFolderId + ":/" + LEDGER + ":/content",
     { method: "PUT", body: JSON.stringify(ledger, null, 1), headers: { "Content-Type": "application/json" } });
-  return { text: (added ? added + " PDF rangé" + (added > 1 ? "s" : "") + " dans Fournisseurs. " : "Aucun nouveau PDF à ranger. ") + (failed ? failed + " en échec. " : ""), errors };
+  return { text: (period ? inv.length + " facture" + (inv.length > 1 ? "s" : "") + " Qonto " + period.label + ". " : "") + (added ? added + " PDF rangé" + (added > 1 ? "s" : "") + " dans Fournisseurs. " : "Aucun nouveau PDF à ranger. ") + (failed ? failed + " en échec. " : ""), errors };
 }
 
 /* ---------- Justificatifs à joindre sur Qonto (file d'attente remplie par la routine) ----------
@@ -1377,7 +1379,7 @@ function knownDocs(ledger){
   }
   return k;
 }
-async function importGmail(msg, days){
+async function importGmail(msg, period){
   if (!API_URL || !CFG.automationFolderId || gmailBusy) return null;
   const cfg = await loadGmailCfg(); if (!cfg) return null;
   const inbox = (CFG.defaultPath || []).map(encodeURIComponent).join("/");
@@ -1392,7 +1394,7 @@ async function importGmail(msg, days){
     for (let round = 0; round < 5; round++) {
       const ledger = (await autoFile(MAIL_LEDGER)) || { mails: [] }; ledger.mails = ledger.mails || [];
       if (msg) msg.textContent = "Lecture de la boîte " + cfg.email + "…";
-      const res = await gmailCall("/gmail/fetch", { blob: cfg.blob, days, skip: ledger.mails.map(m => String(m.msgid)), max: 6 });
+      const res = await gmailCall("/gmail/fetch", { blob: cfg.blob, days: typeof period === "number" ? period : 30, after: period && period.after, before: period && period.before, skip: ledger.mails.map(m => String(m.msgid)), max: 6 });
       if (!res.messages.length) { for (const s of res.skipped || []) errors.push("mail trop lourd ignoré (" + Math.round(s.size / 1048576) + " Mo)"); break; }
       const done = [];
       for (const m of res.messages) {
@@ -1501,6 +1503,56 @@ function showErrors(list){
   store.set("scanner.qontoErrors", { at: Date.now(), list });
 }
 
+/* ---------- Choix de la période (onglets Factures Qonto et Gmail) ----------
+   Renvoie { from, to } (AAAA-MM-JJ, bornes incluses, heure de l'appareil), { after, before } en secondes
+   (minuit local, « before » = lendemain de la dernière date) et un libellé pour le compte rendu. */
+const ymd = d => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+const frDay = s => s.split("-").reverse().join("/");
+const PERIODS = {
+  qonto: [["today", "Aujourd'hui"], ["3d", "3 derniers jours"], ["week", "7 derniers jours"], ["month", "30 derniers jours"], ["year", "Depuis janvier"], ["custom", "Du… au…"]],
+  mail:  [["today", "Aujourd'hui"], ["3d", "3 derniers jours"], ["week", "7 derniers jours"], ["month", "30 derniers jours"], ["custom", "Du… au…"]]
+};
+const PERIOD_DEFAULT = { qonto: "year", mail: "month" };
+function periodOf(kind){
+  const st = store.get("scanner.period." + kind, {}) || {};
+  const key = PERIODS[kind].some(p => p[0] === st.key) ? st.key : PERIOD_DEFAULT[kind];
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const back = n => { const d = new Date(today); d.setDate(d.getDate() - n); return ymd(d); };
+  let from, to = ymd(today);
+  if (key === "today") from = to;
+  else if (key === "3d") from = back(2);
+  else if (key === "week") from = back(6);
+  else if (key === "month") from = back(29);
+  else if (key === "year") from = today.getFullYear() + "-01-01";
+  else { from = st.from || back(6); to = st.to || to; if (from > to) [from, to] = [to, from]; }
+  const midnight = s => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+  const end = midnight(to); end.setDate(end.getDate() + 1);
+  const label = key === "today" ? "aujourd'hui (" + frDay(from) + ")" : key === "year" ? "depuis le " + frDay(from) : from === to ? "le " + frDay(from) : "du " + frDay(from) + " au " + frDay(to);
+  return { key, from, to, after: Math.floor(midnight(from) / 1000), before: Math.floor(end / 1000), label };
+}
+function setupPeriod(kind, boxId){
+  const box = $(boxId); if (!box) return;
+  const chips = box.querySelector(".pchips"), range = box.querySelector(".prange"), info = box.querySelector('[data-k="info"]');
+  const inFrom = box.querySelector('[data-k="from"]'), inTo = box.querySelector('[data-k="to"]');
+  const draw = () => {
+    const p = periodOf(kind);
+    for (const b of chips.children) b.setAttribute("aria-pressed", String(b.dataset.key === p.key));
+    range.hidden = p.key !== "custom";
+    if (p.key === "custom") { inFrom.value = p.from; inTo.value = p.to; inFrom.max = inTo.max = ymd(new Date()); }
+    info.textContent = "Sera traité : " + p.label + ".";
+  };
+  for (const [key, txt] of PERIODS[kind]) {
+    const b = document.createElement("button"); b.type = "button"; b.dataset.key = key; b.textContent = txt;
+    b.onclick = () => { store.set("scanner.period." + kind, Object.assign({}, store.get("scanner.period." + kind, {}), { key })); draw(); };
+    chips.append(b);
+  }
+  const keep = () => { const st = store.get("scanner.period." + kind, {}) || {}; store.set("scanner.period." + kind, Object.assign(st, { key: "custom", from: inFrom.value || st.from, to: inTo.value || st.to })); draw(); };
+  inFrom.onchange = inTo.onchange = keep;
+  draw();
+}
+setupPeriod("qonto", "qontoPeriod");
+setupPeriod("mail", "mailPeriod");
+
 async function runNow(mode, ui){
   mode = mode === "qonto" || mode === "mail" ? mode : "";
   const btn = $(ui ? ui.btn : mode === "qonto" ? "qontoImport" : mode === "mail" ? "runMail" : "runNow"), msg = $(ui ? ui.msg : mode === "qonto" ? "qontoMsg" : mode === "mail" ? "mailMsg" : "runMsg");
@@ -1511,6 +1563,7 @@ async function runNow(mode, ui){
     // réveille le service (offre gratuite Render : mise en veille), puis lance
     for (let i = 0; i < 6; i++) { try { const h = await fetch(API_URL + "/health", {cache: "no-store"}); if (h.ok) break; } catch(e) {} await new Promise(r => setTimeout(r, 8000)); }
     let done = "", errors = [];
+    const period = mode ? periodOf(mode) : null;
     if (!mode) {
       try {
         const cv = await convertScannedInInbox(msg);
@@ -1528,21 +1581,21 @@ async function runNow(mode, ui){
     try { const qr = await processQontoQueue(token, msg); if (qr) { done += qr.text; errors = errors.concat(qr.errors); } }
     catch(e) { errors = errors.concat(["Justificatifs à joindre sur Qonto : " + (e.status ? errText(e) : (e.message || String(e)))]); }
     if (mode === "mail") {
-      try { const g = await importGmail(msg, 30); if (g) { mode = "mailimap"; done += g.text; errors = errors.concat(g.errors.map(m => "Gmail : " + m)); } }
+      try { const g = await importGmail(msg, period); if (g) { mode = "mailimap"; done += g.text; errors = errors.concat(g.errors.map(m => "Gmail : " + m)); } }
       catch(e) { errors = errors.concat(["Lecture de Gmail par l'appli : " + (e.message || String(e)) + " (le traitement passe par le connecteur Gmail de Claude)"]); }
       if (mode === "mailimap") refreshInbox();
     }
     if (mode === "qonto") {
-      try { const res = await importQontoPdfs(token, msg); done += res.text; errors = errors.concat(res.errors); }
+      try { const res = await importQontoPdfs(token, msg, period); done += res.text; errors = errors.concat(res.errors); }
       catch(e) { done += "PDF non rangés. "; errors = errors.concat([e.message || String(e)]); }
       showErrors(errors);
     }
     const report = (mode || done || errors.length) ? (done + (errors.length ? "Erreurs : " + errors.join(" | ") : "Aucune erreur.")).slice(0, 1500) : "";
-    const r = await fetch(API_URL + "/run", { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify({ mode, report }) });
+    const r = await fetch(API_URL + "/run", { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ mode, report }, period ? { from: period.from, to: period.to } : {})) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
-    msg.textContent = mode === "qonto" ? done + "Import lancé. Les factures apparaîtront ici dans quelques minutes (bouton Actualiser du suivi)."
-      : /^mail/.test(mode) ? done + "Traitement des mails lancé. Les factures trouvées apparaîtront ci-dessous d'ici quelques minutes, avec leur motif en cas de problème."
+    msg.textContent = mode === "qonto" ? done + "Import lancé (" + period.label + "). Les factures apparaîtront ici dans quelques minutes (bouton Actualiser du suivi)."
+      : /^mail/.test(mode) ? done + "Traitement des mails lancé (" + period.label + "). Les factures trouvées apparaîtront ci-dessous d'ici quelques minutes, avec leur motif en cas de problème."
       : done + "Traitement lancé. Les factures apparaîtront ci-dessous d'ici quelques minutes, avec leur motif en cas de problème.";
     store.set("scanner.lastRun", Date.now()); if (mode !== "qonto") { refreshInbox(); refreshTracking(); for (const t of [180000, 360000, 600000]) setTimeout(async () => { try { await processDepositQueue(await getToken(), null); } catch(e) {} await autoExcel(false); refreshInbox(); refreshTracking(); }, t); }
   } catch(e) { if (mode === "qonto") showErrors([].concat($("qontoErrors") && $("qontoErrors").dataset.list ? JSON.parse($("qontoErrors").dataset.list) : [], ["Lancement du traitement : " + (e.message || e)])); msg.className = "msg"; msg.textContent = "Lancement impossible : " + (e.code === "signed_out" ? "reconnectez-vous." : e instanceof TypeError ? "le service de lancement ne répond pas (" + API_URL + "). Réessayez dans une minute." : e.message); }

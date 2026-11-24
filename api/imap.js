@@ -190,12 +190,14 @@ function classify(name, subject){
   }
   return { ok: false, motif: "aucun indice de facture dans le nom du fichier ni l'objet du mail" };
 }
-const QUERY = d => 'has:attachment -from:me -label:"' + LABEL + '" newer_than:' + d + "d (facture OR invoice OR receipt OR reçu OR avoir OR quittance OR \"ticket de caisse\" OR \"note d'honoraires\")";
+// d = nombre de jours, ou { after, before } en secondes (période choisie dans l'appli ; Gmail accepte les horodatages Unix)
+const QUERY = d => 'has:attachment -from:me -label:"' + LABEL + '" ' + (typeof d === "object" ? "after:" + d.after + " before:" + d.before : "newer_than:" + d + "d") + " (facture OR invoice OR receipt OR reçu OR avoir OR quittance OR \"ticket de caisse\" OR \"note d'honoraires\")";
 // Messages non traités, avec leurs pièces jointes utiles (PDF, et images hors logos de signature)
-async function fetchInvoices(user, pass, { days = 30, skip = [], max = 8, maxBytes = 20 * 1024 * 1024 } = {}, opts){
+async function fetchInvoices(user, pass, { days = 30, after, before, skip = [], max = 8, maxBytes = 20 * 1024 * 1024 } = {}, opts){
+  const range = after > 1e9 && before > after ? { after: after | 0, before: before | 0 } : Math.max(1, Math.min(365, days | 0));
   return session(user, pass, async c => {
     await c.selectAll();
-    const uids = (await c.search(QUERY(Math.max(1, Math.min(365, days | 0))))).sort((a, b) => b - a);
+    const uids = (await c.search(QUERY(range))).sort((a, b) => b - a);
     const info = (await c.fetchSizes(uids.slice(0, 200))).filter(x => !skip.includes(x.msgid));
     const messages = [], skipped = []; let total = 0;
     for (const m of info) {

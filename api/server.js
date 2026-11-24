@@ -91,7 +91,7 @@ async function listEinvoices(){
       const ht = x.total_amount_excluding_taxes ? sign * Math.abs(money(x.total_amount_excluding_taxes)) : +(ttc - tva).toFixed(2);
       const date = String(x.issue_date || x.created_at || "").slice(0, 10);
       const sup = supplierName(x.supplier_name || (x.seller && x.seller.name));
-      out.push({ id: x.id, supplier: sup, supplierRaw: x.supplier_name || "", number: x.invoice_number || "", date,
+      out.push({ id: x.id, supplier: sup, supplierRaw: x.supplier_name || "", number: x.invoice_number || "", date, received: String(x.created_at || "").slice(0, 10),
         ht, tva, ttc, creditNote: !!x.is_credit_note, status: x.status || "",
         attachmentId: x.display_attachment_id || x.attachment_id || "",
         transactions: (x.matched_transactions || []).map(t => t.transaction_id || t.subject_id).filter(Boolean),
@@ -191,7 +191,7 @@ http.createServer(async (req, res) => {
       if (url.pathname === "/gmail/test") return send(res, origin, 200, { ...(await imap.test(cfg.email, cfg.password)), email: cfg.email });
       if (url.pathname === "/gmail/fetch") {
         const skip = Array.isArray(b.skip) ? b.skip.map(String).slice(-2000) : [];
-        return send(res, origin, 200, { email: cfg.email, ...(await imap.fetchInvoices(cfg.email, cfg.password, { days: +b.days || 30, skip, max: Math.min(10, +b.max || 6) })) });
+        return send(res, origin, 200, { email: cfg.email, ...(await imap.fetchInvoices(cfg.email, cfg.password, { days: +b.days || 30, after: +b.after || 0, before: +b.before || 0, skip, max: Math.min(10, +b.max || 6) })) });
       }
       if (url.pathname === "/gmail/label") return send(res, origin, 200, await imap.labelDone(cfg.email, cfg.password, Array.isArray(b.uids) ? b.uids : []));
       return send(res, origin, 404, { error: "Introuvable" });
@@ -213,18 +213,23 @@ http.createServer(async (req, res) => {
   }
 
   // 3. type de lancement : traitement normal, ou import de toutes les e-factures Qonto
-  let mode = "", report = "";
+  let mode = "", report = "", from = "", to = "";
   try {
     let raw = ""; for await (const c of req) { raw += c; if (raw.length > 4000) break; }
     const b = raw ? (JSON.parse(raw) || {}) : {};
     mode = String(b.mode || ""); report = String(b.report || "").replace(/[\r\n]+/g, " ").slice(0, 1500);
+    // période choisie dans l'appli (AAAA-MM-JJ, bornes incluses)
+    const day = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : "";
+    from = day(b.from); to = day(b.to); if (from && to && from > to) [from, to] = [to, from];
   } catch (e) { mode = ""; }
+  const frd = s => s.split("-").reverse().join("/");
+  const per = from && to ? (from === to ? "du " + frd(from) : "du " + frd(from) + " au " + frd(to)) : "";
   const text = (mode === "mailimap"
-    ? "Lancement manuel depuis l'appli Scanner de factures : Traitement mail (import Gmail par l'appli). L'appli vient de déposer dans « À traiter » les pièces jointes des mails non traités des 30 derniers jours (noms commençant par « Gmail - », §1 bis de la procédure) et a posé le libellé « Facture traitée » sur ces mails : traite-les comme des factures reçues par Gmail (source « Gmail »), sans passer par le connecteur Gmail. Puis le traitement habituel."
+    ? "Lancement manuel depuis l'appli Scanner de factures : Traitement mail (import Gmail par l'appli). L'appli vient de déposer dans « À traiter » les pièces jointes des mails non traités " + (per ? "reçus " + per + " (période choisie par Farid)" : "des 30 derniers jours") + " (noms commençant par « Gmail - », §1 bis de la procédure) et a posé le libellé « Facture traitée » sur ces mails : traite-les comme des factures reçues par Gmail (source « Gmail »), sans passer par le connecteur Gmail. Puis le traitement habituel."
     : mode === "mail"
-    ? "Lancement manuel depuis l'appli Scanner de factures : Traitement mail. Balayer tout de suite la boîte Gmail (§1 de la procédure, recherche élargie aux 30 derniers jours, toujours sans les mails déjà marqués « Facture traitée »), puis traiter chaque facture trouvée (renommage, rangement, tableau, rapprochement Qonto) et poser le libellé « Facture traitée »."
+    ? "Lancement manuel depuis l'appli Scanner de factures : Traitement mail. Balayer tout de suite la boîte Gmail (§1 de la procédure, recherche " + (per ? "limitée aux mails reçus " + per + " (période choisie par Farid ; requête Gmail after:/before:)" : "élargie aux 30 derniers jours") + ", toujours sans les mails déjà marqués « Facture traitée »), puis traiter chaque facture trouvée (renommage, rangement, tableau, rapprochement Qonto) et poser le libellé « Facture traitée »."
     : mode === "qonto"
-    ? "Lancement manuel depuis l'appli Scanner de factures : Importer les factures Qonto (toutes les factures électroniques fournisseurs depuis le 01/01/2026, §2 bis de la procédure, avec anti-doublon). L'appli vient de ranger les PDF dans Fournisseurs/<NOM>/<AAAA> : mets le lien « justificatif » des lignes d'après _Automatisation/efactures_classees.json. Puis le traitement habituel."
+    ? "Lancement manuel depuis l'appli Scanner de factures : Importer les factures Qonto (" + (per ? "les factures électroniques fournisseurs datées " + per + ", période choisie par Farid" : "toutes les factures électroniques fournisseurs depuis le 01/01/2026") + ", §2 bis de la procédure, avec anti-doublon). L'appli vient de ranger les PDF dans Fournisseurs/<NOM>/<AAAA> : mets le lien « justificatif » des lignes d'après _Automatisation/efactures_classees.json. Puis le traitement habituel."
     : "Lancement manuel depuis l'appli Scanner de factures.")
     + (report ? " Résultat de l'import côté appli (à recopier tel quel dans le compte rendu) : " + report : "");
 
